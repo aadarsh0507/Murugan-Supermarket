@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Enhanced viewport for responsive design across all devices -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, minimum-scale=1.0, user-scalable=yes, viewport-fit=cover" />
+    
+    <!-- Prevent iOS Safari from auto-formatting phone numbers -->
+    <meta name="format-detection" content="telephone=no" />
+    
+    <!-- Theme color for mobile browsers -->
+    <meta name="theme-color" content="#6366f1" />
+    <meta name="msapplication-TileColor" content="#6366f1" />
+    
+    <!-- PWA and mobile optimization -->
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="SuperMart" />
+    
+    <!-- Performance and rendering optimizations -->
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="renderer" content="webkit" />
+    
+    <!-- Prevent text size adjustment on iOS -->
+    <meta name="apple-touch-fullscreen" content="yes" />
+    
+    <title>SuperMart - Supermarket Management System</title>
+    <meta name="description" content="Complete supermarket management system for billing, inventory, stock management, and reports" />
+    <meta name="author" content="SuperMart" />
+
+    <meta property="og:title" content="SuperMart - Supermarket Management System" />
+    <meta property="og:description" content="Complete supermarket management system for billing, inventory, stock management, and reports" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@lovable_dev" />
+    <meta name="twitter:image" content="https://lovable.dev/opengraph-image-p98pqg.png" />
+    
+    <!-- Preconnect for performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="dns-prefetch" href="https://fonts.googleapis.com" />
+    
+    <!-- Responsive base styles -->
+    <style>
+      /* Prevent horizontal scroll and ensure proper rendering */
+      * {
+        box-sizing: border-box;
+      }
+      
+      html {
+        -webkit-text-size-adjust: 100%;
+        -ms-text-size-adjust: 100%;
+        text-size-adjust: 100%;
+        height: 100%;
+        width: 100%;
+        overflow-x: hidden;
+      }
+      
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        min-height: 100vh;
+        overflow-x: hidden;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        position: relative;
+      }
+      
+      #root {
+        width: 100%;
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
+      }
+      
+      /* Ensure images and media are responsive */
+      img, video, iframe {
+        max-width: 100%;
+        height: auto;
+      }
+      
+      /* Prevent text selection issues on mobile */
+      input, textarea, select {
+        font-size: 16px; /* Prevents zoom on iOS */
+      }
+      
+      /* Smooth scrolling */
+      @media (prefers-reduced-motion: no-preference) {
+        html {
+          scroll-behavior: smooth;
+        }
+      }
+      
+      /* Touch action optimization */
+      * {
+        touch-action: manipulation;
+      }
+      
+      button, a, [role="button"] {
+        touch-action: manipulation;
+        -webkit-tap-highlight-color: rgba(0, 0, 0, 0.1);
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -1,0 +1,396 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design system: colors, gradients, fonts. All colors in HSL. */
+
+@layer base {
+  :root {
+    --background: 220 25% 97%;
+    --foreground: 220 15% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 15% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 15% 15%;
+
+    --primary: 239 70% 55%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 20% 92%;
+    --secondary-foreground: 220 15% 20%;
+
+    --muted: 220 20% 95%;
+    --muted-foreground: 220 10% 45%;
+
+    --accent: 25 95% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --success: 142 76% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 20% 88%;
+    --input: 220 20% 88%;
+    --ring: 239 70% 55%;
+
+    --radius: 0.75rem;
+
+    --gradient-primary: linear-gradient(135deg, hsl(239 70% 55%), hsl(260 70% 60%));
+    --gradient-accent: linear-gradient(135deg, hsl(25 95% 55%), hsl(35 95% 60%));
+    --gradient-success: linear-gradient(135deg, hsl(142 76% 45%), hsl(152 76% 50%));
+    --gradient-mesh: radial-gradient(at 40% 20%, hsl(239 70% 95%) 0px, transparent 50%),
+                     radial-gradient(at 80% 0%, hsl(260 70% 95%) 0px, transparent 50%),
+                     radial-gradient(at 0% 50%, hsl(25 95% 95%) 0px, transparent 50%);
+
+    --shadow-sm: 0 2px 8px -2px hsl(220 15% 15% / 0.08);
+    --shadow-md: 0 4px 16px -4px hsl(220 15% 15% / 0.12);
+    --shadow-lg: 0 12px 32px -8px hsl(220 15% 15% / 0.16);
+    --shadow-glow: 0 0 32px hsl(239 70% 55% / 0.2);
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 15% 15%;
+    --sidebar-primary: 239 70% 55%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 20% 95%;
+    --sidebar-accent-foreground: 220 15% 20%;
+    --sidebar-border: 220 20% 88%;
+    --sidebar-ring: 239 70% 55%;
+
+    /* Responsive typography scale (mobile-first) */
+    --text-xs: 0.75rem;
+    --text-sm: 0.875rem;
+    --text-base: 1rem;
+    --text-lg: 1.125rem;
+    --text-xl: 1.25rem;
+    --text-2xl: 1.5rem;
+    --text-3xl: 1.875rem;
+    --touch-target: 44px;
+  }
+
+  .dark {
+    --background: 220 20% 10%;
+    --foreground: 220 15% 95%;
+
+    --card: 220 18% 14%;
+    --card-foreground: 220 15% 95%;
+
+    --popover: 220 18% 14%;
+    --popover-foreground: 220 15% 95%;
+
+    --primary: 239 70% 60%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 18% 20%;
+    --secondary-foreground: 220 15% 95%;
+
+    --muted: 220 18% 18%;
+    --muted-foreground: 220 10% 60%;
+
+    --accent: 25 95% 60%;
+    --accent-foreground: 0 0% 100%;
+
+    --success: 142 76% 50%;
+    --success-foreground: 0 0% 100%;
+
+    --destructive: 0 84% 65%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 18% 22%;
+    --input: 220 18% 22%;
+    --ring: 239 70% 60%;
+
+    --gradient-primary: linear-gradient(135deg, hsl(239 70% 60%), hsl(260 70% 65%));
+    --gradient-accent: linear-gradient(135deg, hsl(25 95% 60%), hsl(35 95% 65%));
+    --gradient-success: linear-gradient(135deg, hsl(142 76% 50%), hsl(152 76% 55%));
+    --gradient-mesh: radial-gradient(at 40% 20%, hsl(239 70% 15%) 0px, transparent 50%),
+                     radial-gradient(at 80% 0%, hsl(260 70% 15%) 0px, transparent 50%),
+                     radial-gradient(at 0% 50%, hsl(25 95% 15%) 0px, transparent 50%);
+
+    --shadow-sm: 0 2px 8px -2px hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 16px -4px hsl(0 0% 0% / 0.4);
+    --shadow-lg: 0 12px 32px -8px hsl(0 0% 0% / 0.5);
+    --shadow-glow: 0 0 32px hsl(239 70% 60% / 0.3);
+
+    --sidebar-background: 220 18% 14%;
+    --sidebar-foreground: 220 15% 95%;
+    --sidebar-primary: 239 70% 60%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 18% 20%;
+    --sidebar-accent-foreground: 220 15% 95%;
+    --sidebar-border: 220 18% 22%;
+    --sidebar-ring: 239 70% 60%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    /* Prevent zoom on focus for inputs on iOS */
+    font-size: 16px;
+    line-height: 1.5;
+  }
+
+  /* Scale base font on larger screens (mobile-first) */
+  @media (min-width: 640px) {
+    body {
+      font-size: 16px;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    body {
+      font-size: 16px;
+    }
+  }
+}
+
+/* ========== Responsive utilities (mobile-first) ========== */
+@layer utilities {
+  /* Touch targets: min 44px for tap areas (WCAG / Apple HIG) */
+  .touch-target {
+    min-height: var(--touch-target);
+    min-width: var(--touch-target);
+  }
+
+  .touch-target-y {
+    min-height: var(--touch-target);
+  }
+
+  .touch-target-x {
+    min-width: var(--touch-target);
+  }
+
+  /* Horizontal scroll container for tables (no layout break, touch-friendly) */
+  .table-scroll {
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: visible;
+    -webkit-overflow-scrolling: touch;
+    scroll-behavior: auto;
+  }
+
+  .table-scroll table {
+    min-width: max-content;
+  }
+
+  /* Prevent horizontal overflow on page */
+  .overflow-x-safe {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  /* Responsive container padding (use with container) */
+  .container-padding {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  @media (min-width: 640px) {
+    .container-padding {
+      padding-left: 1.5rem;
+      padding-right: 1.5rem;
+    }
+  }
+
+  @media (min-width: 1024px) {
+    .container-padding {
+      padding-left: 2rem;
+      padding-right: 2rem;
+    }
+  }
+
+  /* Hide on small screens, show from sm up */
+  .hide-below-sm {
+    display: none;
+  }
+  @media (min-width: 640px) {
+    .hide-below-sm {
+      display: revert;
+    }
+  }
+
+  /* Show only on small screens */
+  .show-below-sm {
+    display: revert;
+  }
+  @media (min-width: 640px) {
+    .show-below-sm {
+      display: none;
+    }
+  }
+
+  /* Hide below md (768px), show from md up */
+  .hide-below-md {
+    display: none;
+  }
+  @media (min-width: 768px) {
+    .hide-below-md {
+      display: revert;
+    }
+  }
+
+  /* Show only below md */
+  .show-below-md {
+    display: revert;
+  }
+  @media (min-width: 768px) {
+    .show-below-md {
+      display: none;
+    }
+  }
+
+  /* Hide below lg (1024px) */
+  .hide-below-lg {
+    display: none;
+  }
+  @media (min-width: 1024px) {
+    .hide-below-lg {
+      display: revert;
+    }
+  }
+
+  .show-below-lg {
+    display: revert;
+  }
+  @media (min-width: 1024px) {
+    .show-below-lg {
+      display: none;
+    }
+  }
+}
+
+/* ========== Mobile-first: small screens (< 640px) ========== */
+@media (max-width: 639px) {
+  /* Touch-friendly controls */
+  button:not([class*="size-"]),
+  [role="button"]:not([class*="size-"]),
+  a[class*="button"] {
+    min-height: var(--touch-target);
+    min-width: var(--touch-target);
+    padding: 0.75rem 1rem;
+  }
+
+  input:not([type="checkbox"]):not([type="radio"]),
+  textarea,
+  select {
+    font-size: 16px; /* Prevents zoom on iOS */
+    padding: 0.75rem 1rem;
+    min-height: var(--touch-target);
+  }
+
+  /* Tables: horizontal scroll only (card layout is done in components) */
+  .table-scroll {
+    margin-left: -0.5rem;
+    margin-right: -0.5rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+  }
+}
+
+/* ========== Tablet and up (768px+) ========== */
+@media (min-width: 768px) {
+  /* Relax touch min on larger screens where hover is used */
+  button[class*="size-icon"],
+  [role="button"][class*="size-icon"] {
+    min-height: 2.25rem;
+    min-width: 2.25rem;
+  }
+}
+
+/* ========== Tablet range: 768px–1024px ========== */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+/* ========== Desktop (1024px+) ========== */
+@media (min-width: 1024px) {
+  .container {
+    max-width: 1400px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+
+  main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  aside[class*="sidebar"] {
+    position: static;
+  }
+
+  /* Full table layout on desktop */
+  .table-scroll table {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+/* ========== Modals / dialogs: responsive ========== */
+[role="dialog"] {
+  width: calc(100vw - 2rem);
+  max-width: calc(100vw - 2rem);
+  margin: 1rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+}
+
+@media (min-width: 640px) {
+  [role="dialog"] {
+    width: auto;
+    max-width: min(32rem, calc(100vw - 2rem));
+    margin: auto;
+  }
+}
+
+/* ========== Forms: prevent overflow ========== */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+input[type="url"],
+textarea,
+select {
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+/* ========== Images ========== */
+  /* Touch-friendly horizontal scroll (e.g. tables) */
+  .overflow-x-auto {
+    -webkit-overflow-scrolling: touch;
+  }
+
+  img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+
+/* ========== Very large screens ========== */
+@media (min-width: 1920px) {
+  main > div {
+    max-width: 1600px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}
