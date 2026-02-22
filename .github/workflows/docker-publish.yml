@@ -20,6 +20,19 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # If frontend is a broken submodule (no URL in .gitmodules), leave it out so backend still builds
+          submodules: false
+
+      - name: Check frontend availability
+        id: frontend-check
+        run: |
+          if [ -f frontend/Dockerfile.frontend ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::warning::frontend/Dockerfile.frontend not found. If frontend is a submodule, add its URL to .gitmodules and use submodules: true in checkout. Skipping frontend image build."
+          fi
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -63,6 +76,7 @@ jobs:
             type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Build and push frontend
+        if: steps.frontend-check.outputs.available == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ./frontend
