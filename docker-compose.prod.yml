@@ -1,0 +1,160 @@
+services:
+  # db:
+  #   image: mysql:8
+  #   container_name: supermarket-db-prod
+  #   ports:
+  #     - "3306:3306"
+  #   environment:
+  #     - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+  #     - MYSQL_DATABASE=${MYSQL_DATABASE}
+  #     - MYSQL_USER=${MYSQL_USER}
+  #     - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+  #   volumes:
+  #     - supermarket_data:/var/lib/mysql
+  #   networks:
+  #     - supermarket-network
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test:
+  #       [
+  #         "CMD",
+  #         "mysqladmin",
+  #         "ping",
+  #         "-h",
+  #         "localhost",
+  #         "-u",
+  #         "root",
+  #         "-p${MYSQL_ROOT_PASSWORD}",
+  #       ]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #     start_period: 30s
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "1"
+  #         memory: 1G
+  #       reservations:
+  #         cpus: "0.5"
+  #         memory: 512M
+
+  # phpmyadmin:
+  #   image: phpmyadmin/phpmyadmin
+  #   container_name: supermarket-phpmyadmin-prod
+  #   ports:
+  #     - "8080:80"
+  #   environment:
+  #     - PMA_HOST=db
+  #     - PMA_PORT=3306
+  #     - PMA_USER=root
+  #     - PMA_PASSWORD=${MYSQL_ROOT_PASSWORD}
+  #     - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   networks:
+  #     - supermarket-network
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         cpus: "0.5"
+  #         memory: 256M
+  #       reservations:
+  #         cpus: "0.25"
+  #         memory: 128M
+
+  backend:
+    image: ghcr.io/murugananthamb/supermarket/backend:v3
+    # build:
+    #   context: ./backend
+    #   dockerfile: Dockerfile.backend
+    container_name: supermarket-backend-prod
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=${PORT}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRE=${JWT_EXPIRE}
+      - BCRYPT_ROUNDS=${BCRYPT_ROUNDS}
+      - EMAIL_USER=${EMAIL_USER}
+      - EMAIL_PASS=${EMAIL_PASS}
+      - FRONTEND_URL=${FRONTEND_URL}
+      - MYSQL_URL=${MYSQL_URL}
+      - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      # - MYSQL_MOB_APP_URL=${MYSQL_MOB_APP_URL}
+      # - MYSQL_GLOBAL_URL=${MYSQL_GLOBAL_URL}
+    env_file:
+      - .env
+    volumes:
+      - supermarket-item-img-volume:/super_mart/uploads
+    networks:
+      - supermarket-network
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--quiet",
+          "--tries=1",
+          "--spider",
+          "http://localhost:5000/api/health",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
+        reservations:
+          cpus: "0.5"
+          memory: 512M
+
+  frontend:
+    image: ghcr.io/murugananthamb/supermarket/frontend:v3
+    # build:
+    #   context: ./frontend
+    #   dockerfile: Dockerfile.frontend
+    container_name: supermarket-frontend-prod
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - supermarket-network
+    restart: unless-stopped
+    healthcheck:
+      test:
+        ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
+volumes:
+  supermarket-item-img-volume:
+    external: true
+  supermarket_data:
+    external: true
+
+networks:
+  supermarket-network:
+    driver: bridge

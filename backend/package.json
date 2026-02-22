@@ -1,0 +1,58 @@
+{
+  "name": "fresh-flow-store-backend",
+  "version": "1.0.0",
+  "description": "Backend API for Murugan Mart",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "create-admin": "node scripts/createAdmin.js",
+    "migrate-schema": "node scripts/migrateSchema.js",
+    "fix-supplier-code": "node scripts/fixSupplierCodeColumn.js",
+    "add-store-id-categories": "node scripts/addStoreIdToCategories.js",
+    "migrate-equipments": "node scripts/migrateEquipmentsTable.js",
+    "migrate-equipments-to-appliance": "node scripts/migrateEquipmentsToAppliance.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "csv-parser": "^3.2.0",
+    "dotenv": "^16.6.1",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "express-validator": "^7.0.1",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "multer": "^2.0.2",
+    "mysql2": "^3.15.3",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^7.0.10",
+    "qrcode": "^1.5.4",
+    "sequelize": "6",
+    "speakeasy": "^2.0.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "keywords": [
+    "express",
+    "mysql",
+    "authentication",
+    "jwt",
+    "api"
+  ],
+  "author": "Murugan Mart",
+  "license": "MIT",
+  "packageManager": "pnpm@10.20.0",
+  "pnpm": {
+    "overrides": {
+      "jws": ">=3.2.3",
+      "validator": ">=13.15.22",
+      "nodemailer@<=7.0.10": ">=7.0.11"
+    }
+  }
+}

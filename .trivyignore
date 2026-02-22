@@ -1,0 +1,17 @@
+# Trivy ignore file
+# Add CVE IDs or vulnerability patterns to ignore here
+# Format: CVE-YYYY-NNNNN or vulnerability ID
+
+# Example (uncomment and modify as needed):
+# CVE-2023-12345
+# CVE-2023-67890
+
+# Node.js vulnerabilities that are acceptable for this project
+# Add specific CVE IDs here if needed after scanning
+
+# CVE-2025-64756: glob vulnerability in npm's bundled dependencies
+# This is in npm's internal node_modules (usr/local/lib/node_modules/npm/node_modules/glob)
+# Not used in production - we use pnpm, not npm
+# npm update in Dockerfile should fix this, but keeping as fallback until npm releases update
+CVE-2025-64756
+

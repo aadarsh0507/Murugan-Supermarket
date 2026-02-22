@@ -1,0 +1,58 @@
+# Node.js general
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Build outputs
+dist/
+build/
+out/
+.temp/
+tmp/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+
+# OS/IDE/Classics
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# VSCode
+.vscode/
+.history/
+
+# Others common for JS/TS
+*.local
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# By framework, if used
+/.next/
+/.next/
+/out/
+/.svelte-kit/
+/.sapper/
+/.nuxt/
+
+# Misc
+frontend/.env
+backend/.env
+
+backend-v3.tar
+frontend-v3.tar
+# End Generation Here
+```
