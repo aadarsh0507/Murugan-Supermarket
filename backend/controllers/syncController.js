@@ -502,6 +502,37 @@ export const backupAndUpload = async (req, res) => {
       console.log("✅ Backup dump completed successfully");
 
       /* ----------------------------------------------------
+         1b. PUSH BACKUP TO LOCAL DB (restore so local DB exists / is populated)
+      ---------------------------------------------------- */
+      try {
+        const ensureDb = spawn("docker", [
+          "exec", "-e", `MYSQL_PWD=${mysqlPassword}`,
+          "mysql8", "mysql", "-u", mysqlUser, "-e",
+          `CREATE DATABASE IF NOT EXISTS \`${databaseName}\`;`
+        ], { env: process.env });
+        await new Promise((resolve, reject) => {
+          let err = "";
+          ensureDb.stderr.on("data", (d) => { err += d.toString(); });
+          ensureDb.on("close", (c) => (c === 0 ? resolve() : reject(new Error(err || `Exit ${c}`))));
+        });
+        console.log("[Backup] Ensuring local DB exists: " + databaseName);
+
+        const restore = spawn("docker", [
+          "exec", "-e", `MYSQL_PWD=${mysqlPassword}`,
+          "mysql8", "sh", "-c",
+          `mysql -u ${mysqlUser} ${databaseName} < ${containerBackup}`
+        ], { env: process.env });
+        let restoreErr = "";
+        restore.stderr.on("data", (d) => { restoreErr += d.toString(); });
+        await new Promise((resolve, reject) => {
+          restore.on("close", (c) => (c === 0 ? resolve() : reject(new Error(restoreErr || `Exit ${c}`))));
+        });
+        console.log("[Backup] ✅ Local backup restored to local DB");
+      } catch (restoreErr) {
+        console.warn("[Backup] Restore to local DB failed (continuing):", restoreErr.message);
+      }
+
+      /* ----------------------------------------------------
          2️⃣ COPY FILE FROM CONTAINER TO HOST TEMP
       ---------------------------------------------------- */
       const hostTemp = path.join(
@@ -614,7 +645,7 @@ export const backupAndUpload = async (req, res) => {
         ---------------------------------------------------- */
         return res.json({
           success: true,
-          message: "Backup file created and pushed to Global DB",
+          message: "Backup created, restored to local DB, and pushed to Global DB",
           filename: path.basename(containerBackup),
           size: fileSize,
         });
