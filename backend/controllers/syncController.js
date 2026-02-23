@@ -1089,9 +1089,13 @@ export const streamSyncToGlobal = async (req, res) => {
 
     // Step 4: Per-table transaction so we can checkpoint and resume after disconnect
     const connection = await getGlobalConnection();
+    try {
+      await connection.query('SET SESSION innodb_lock_wait_timeout = ?', [Number(process.env.SYNC_LOCK_WAIT_TIMEOUT) || 300]);
+    } catch (_) { /* ignore if global server rejects */ }
     const pkByTable = new Map(tablesWithPk.map((t) => [t.tableName, new Set(t.pkColumns.map((k) => String(k).toLowerCase()))]));
 
     const BATCH_SIZE = 500;
+    const SYNC_BATCH_COMMIT_ROWS = Number(process.env.SYNC_BATCH_COMMIT_ROWS) || 300;
 
     try {
       for (const tbl of tableCounts) {
@@ -1339,6 +1343,28 @@ export const streamSyncToGlobal = async (req, res) => {
               message: `Sync failed writing to "${tableName}". See server logs.`
             });
             return closeStream();
+          }
+
+          if (rowIndex > 0 && rowIndex % SYNC_BATCH_COMMIT_ROWS === 0) {
+            try {
+              await connection.commit();
+              await connection.beginTransaction();
+            } catch (batchErr) {
+              try { await connection.rollback(); } catch (_) {}
+              try { connection.release(); } catch (_) {}
+              console.error(`Sync batch commit failed for table "${tableName}":`, batchErr);
+              sendEvent({
+                progress: lastProgress,
+                totalRecords,
+                syncedRecords,
+                insertedRecords,
+                updatedRecords,
+                tableSummary,
+                status: 'error',
+                message: `Sync failed committing batch for "${tableName}". See server logs.`
+              });
+              return closeStream();
+            }
           }
 
           if (useWatermark) processedRecords += 1;
