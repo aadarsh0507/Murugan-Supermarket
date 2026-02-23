@@ -971,7 +971,15 @@ export const streamSyncToGlobal = async (req, res) => {
       tablesWithPk.push({ tableName, pkColumns: pkCols, matchKeyFallback });
     }
 
-    // Step 3: Build incremental sync plan – only changed/new rows per table.
+    // Step 3: Build sync plan.
+    // Default (incremental): only new/updated data is pushed. Tables with updated_at use watermark; others compare with global and push only new/changed rows.
+    // FORCE_FULL_SYNC or ?full=true: compare every table with global and push all new/changed (use for first sync or when global was empty).
+    const forceFullSync = process.env.FORCE_FULL_SYNC === 'true' || process.env.FORCE_FULL_SYNC === '1' || (req.query && (req.query.full === 'true' || req.query.full === '1'));
+    if (forceFullSync) {
+      log('Full sync mode: will compare every table with global and push all new/changed rows (empty global table => push all local data).');
+    } else {
+      log('Incremental sync: only new or updated rows will be pushed (tables with updated_at use watermark; others compare with global).');
+    }
     totalRecords = 0;
     const tableCounts = [];
     for (const { tableName, pkColumns, matchKeyFallback } of tablesWithPk) {
@@ -984,7 +992,7 @@ export const streamSyncToGlobal = async (req, res) => {
         let useWatermark = false;
         let lastSyncedAt = null;
 
-        if (timestampCol) {
+        if (!forceFullSync && timestampCol) {
           lastSyncedAt = await getWatermark(tableName);
           const safeTs = lastSyncedAt ? String(lastSyncedAt).replace(/'/g, "''") : '1970-01-01 00:00:00';
           const countRows = await queryLocalDb(
@@ -995,7 +1003,7 @@ export const streamSyncToGlobal = async (req, res) => {
           useWatermark = true;
           if (countToSync > 0) log(`Local DB: table "${tableName}" has ${countToSync} row(s) changed since last sync (${timestampCol} > ${lastSyncedAt || 'start'})`);
         } else if (fullCount > 0) {
-          log(`Local DB: table "${tableName}" has ${fullCount} record(s) (no updated_at – will compare with global, push only changed)`);
+          log(`Local DB: table "${tableName}" has ${fullCount} record(s)${forceFullSync ? ' (full sync – compare with global, push all new/changed)' : ' (no updated_at – will compare with global, push only changed)'}`);
         }
 
         tableCounts.push({
@@ -1098,9 +1106,15 @@ export const streamSyncToGlobal = async (req, res) => {
     const SYNC_BATCH_COMMIT_ROWS = Number(process.env.SYNC_BATCH_COMMIT_ROWS) || 300;
 
     try {
-      for (const tbl of tableCounts) {
-        const { tableName, count: tableCount, useWatermark, lastSyncedAt, timestampCol, pkColumns } = tbl;
-        if (tableCount === 0) continue;
+      tableLoop: for (const tbl of tableCounts) {
+        const { tableName, count: tableCount, useWatermark, lastSyncedAt, timestampCol, pkColumns, fullCount } = tbl;
+        if (tableCount === 0) {
+          processedRecords += fullCount ?? 0;
+          lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
+          tableSummary.push({ tableName, total: fullCount ?? 0, inserted: 0, updated: 0 });
+          sendProgress();
+          continue;
+        }
 
         await connection.beginTransaction();
 
@@ -1330,8 +1344,17 @@ export const streamSyncToGlobal = async (req, res) => {
             }
           } catch (err) {
             try { await connection.rollback(); } catch (_) {}
-            try { connection.release(); } catch (_) {}
             console.error(`Sync write failed for table "${tableName}":`, err);
+            processedRecords += rowsToPush.length;
+            lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
+            tableSummary.push({
+              tableName,
+              total: rowsToPush.length,
+              inserted: tableInserted,
+              updated: tableUpdated,
+              error: err.message || String(err)
+            });
+            log(`Table "${tableName}": skipped due to error (${tableInserted} inserted, ${tableUpdated} updated before error). Continuing with remaining tables.`);
             sendEvent({
               progress: lastProgress,
               totalRecords,
@@ -1339,10 +1362,11 @@ export const streamSyncToGlobal = async (req, res) => {
               insertedRecords,
               updatedRecords,
               tableSummary,
-              status: 'error',
-              message: `Sync failed writing to "${tableName}". See server logs.`
+              status: 'running',
+              message: `Error syncing "${tableName}". Continuing with remaining tables.`
             });
-            return closeStream();
+            sendProgress();
+            continue tableLoop;
           }
 
           if (rowIndex > 0 && rowIndex % SYNC_BATCH_COMMIT_ROWS === 0) {
@@ -1351,8 +1375,17 @@ export const streamSyncToGlobal = async (req, res) => {
               await connection.beginTransaction();
             } catch (batchErr) {
               try { await connection.rollback(); } catch (_) {}
-              try { connection.release(); } catch (_) {}
               console.error(`Sync batch commit failed for table "${tableName}":`, batchErr);
+              processedRecords += rowsToPush.length - rowIndex + 1;
+              lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
+              tableSummary.push({
+                tableName,
+                total: rowsToPush.length,
+                inserted: tableInserted,
+                updated: tableUpdated,
+                error: batchErr.message || String(batchErr)
+              });
+              log(`Table "${tableName}": skipped after batch commit error. Continuing with remaining tables.`);
               sendEvent({
                 progress: lastProgress,
                 totalRecords,
@@ -1360,10 +1393,11 @@ export const streamSyncToGlobal = async (req, res) => {
                 insertedRecords,
                 updatedRecords,
                 tableSummary,
-                status: 'error',
-                message: `Sync failed committing batch for "${tableName}". See server logs.`
+                status: 'running',
+                message: `Batch commit failed for "${tableName}". Continuing with remaining tables.`
               });
-              return closeStream();
+              sendProgress();
+              continue tableLoop;
             }
           }
 
