@@ -32,6 +32,40 @@ if (!hasGlobalDbConfig) {
 let globalPool = null;
 
 /**
+ * Ensure the global database exists on the server; create it if missing.
+ * Connects without a database (to the server), runs CREATE DATABASE IF NOT EXISTS, then closes.
+ * The global user must have CREATE privilege. Called automatically before first use and on ER_BAD_DB_ERROR.
+ * @returns {Promise<boolean>} true if DB exists or was created, false on error
+ */
+export const ensureGlobalDatabaseExists = async () => {
+  if (!hasGlobalDbConfig) return false;
+  const port = Number(globalPort) || 3306;
+  try {
+    const conn = await mysql.createConnection({
+      host: globalHost,
+      port,
+      user: globalUser,
+      password: globalPassword,
+      connectTimeout: parseInt(process.env.MYSQL_CONNECT_TIMEOUT || '10000', 10),
+    });
+    try {
+      const db = (globalDatabase || '').replace(/`/g, '``');
+      await conn.query(`CREATE DATABASE IF NOT EXISTS \`${db}\``);
+      console.log(`✅ Global database "${globalDatabase}" ensured (exists or created).`);
+      return true;
+    } finally {
+      await conn.end();
+    }
+  } catch (err) {
+    console.error('❌ Could not ensure global database:', err.message);
+    if (err.code === 'ER_DBACCESS_DENIED_ERROR' || err.code === 'ER_ACCESS_DENIED_ERROR') {
+      console.error('   💡 Global user needs CREATE privilege. Run on server: GRANT CREATE ON *.* TO \'' + globalUser + '\'@\'%\'; FLUSH PRIVILEGES;');
+    }
+    return false;
+  }
+};
+
+/**
  * Initialize the global database connection pool.
  * Can be called explicitly to ensure initialization.
  * Returns true if pool was successfully initialized, false otherwise.
@@ -83,12 +117,14 @@ if (hasGlobalDbConfig) {
 
 /**
  * Verify Global DB connection and log result. Call at startup to show global DB connection status.
+ * Ensures the global database exists (creates it if missing) before verifying.
  * Does not throw; logs and resolves (so missing/failed global DB does not block server start).
  */
 export const verifyGlobalConnection = async () => {
   if (!globalPool) {
     return;
   }
+  await ensureGlobalDatabaseExists();
   try {
     const connection = await globalPool.getConnection();
     try {
@@ -114,7 +150,15 @@ export const getGlobalConnection = async () => {
     error.code = 'GLOBAL_DB_NOT_CONFIGURED';
     throw error;
   }
-  return globalPool.getConnection();
+  try {
+    return await globalPool.getConnection();
+  } catch (error) {
+    if (error.code === 'ER_BAD_DB_ERROR') {
+      const created = await ensureGlobalDatabaseExists();
+      if (created) return await globalPool.getConnection();
+    }
+    throw error;
+  }
 };
 
 /**
@@ -132,11 +176,23 @@ export const queryGlobalDb = async (sql, params = []) => {
     const [rows] = await globalPool.query(sql, params);
     return rows;
   } catch (error) {
+    if (error.code === 'ER_BAD_DB_ERROR') {
+      const created = await ensureGlobalDatabaseExists();
+      if (created) {
+        try {
+          const [rows] = await globalPool.query(sql, params);
+          return rows;
+        } catch (retryErr) {
+          Object.assign(error, retryErr);
+        }
+      }
+    }
+
     const host = process.env.MYSQL_GLOBAL_HOST || 'unknown';
     const port = process.env.MYSQL_GLOBAL_PORT || '3306';
     const user = process.env.MYSQL_GLOBAL_USER || 'unknown';
     const database = process.env.MYSQL_GLOBAL_DATABASE || 'unknown';
-    
+
     console.error('❌ Global DB Query Error:', error.message);
     console.error('   Connection: ' + user + '@' + host + ':' + port + '/' + database);
     console.error('   SQL:', sql.length > 200 ? sql.substring(0, 200) + '...' : sql);
