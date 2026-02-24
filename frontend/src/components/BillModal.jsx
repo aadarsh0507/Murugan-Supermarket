@@ -1,16 +1,55 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { X, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
 
 const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
   const { selectedStore } = useAuth();
-  
-  if (!isOpen) return null;
+  // Snapshot bill when modal opens so MRP (and rest) don't get overwritten by later parent updates
+  const [snapshot, setSnapshot] = useState(null);
+
+  useEffect(() => {
+    if (!isOpen || !billData) {
+      setSnapshot(null);
+      return;
+    }
+    const id = billData.id ?? billData.billId;
+    const no = billData.billNo ?? billData.bill_no;
+    setSnapshot((prev) => {
+      if (prev != null && prev.id === id && prev.billNo === no) return prev;
+      return JSON.parse(JSON.stringify(billData));
+    });
+  }, [isOpen, billData]);
+
+  const data = snapshot ?? billData;
 
   const printData = useMemo(() => {
+    if (!data) {
+      return {
+        storeName: '',
+        address: '',
+        phone: '',
+        gstNumber: '',
+        date: '',
+        time: '',
+        billNumber: '',
+        customerName: '',
+        customerAddress: '',
+        customerGstin: '',
+        billBy: '',
+        subtotal: 0,
+        discountAmount: 0,
+        tax: 0,
+        totalAmount: 0,
+        totalQty: 0,
+        totalSavings: 0,
+        items: [],
+        gstBreakdown: [],
+        notes: ''
+      };
+    }
     const fallbackDate = new Date();
-    const rawDate = billData?.date ? new Date(billData.date) : fallbackDate;
+    const rawDate = data?.date ? new Date(data.date) : fallbackDate;
     const validDate = Number.isNaN(rawDate.getTime()) ? fallbackDate : rawDate;
     const formattedDate = validDate.toLocaleDateString('en-IN', {
       day: '2-digit',
@@ -28,8 +67,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       return Number.isFinite(parsed) ? parsed : null;
     };
 
-    const normalizedItems = Array.isArray(billData?.items)
-      ? billData.items.map((item) => {
+    const normalizedItems = Array.isArray(data?.items)
+      ? data.items.map((item) => {
           const quantity = Number.parseFloat(item.quantity ?? item.qty ?? 1);
           // Rate should be the selling price used in Items screen.
           // Accept common server/client field names.
@@ -55,13 +94,9 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
             mrp = toNumber(item.max_retail_price);
           }
           
-          // If MRP is found and valid, use it (even if 0, as that might be the actual value)
-          // Only use selling price as fallback if MRP field was completely missing
-          if (mrp === null) {
-            mrp = sellingPrice > 0 ? sellingPrice : 0;
-          } else if (mrp < 0) {
-            // If MRP is negative (invalid), use selling price
-            mrp = sellingPrice > 0 ? sellingPrice : 0;
+          // If MRP is missing or invalid, leave as 0 (do not substitute selling price)
+          if (mrp === null || mrp < 0) {
+            mrp = 0;
           }
           
           const discount = Number.isFinite(Number.parseFloat(item.discount))
@@ -84,15 +119,15 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
         })
       : [];
 
-    const printableItems = normalizedItems.length > 0 ? normalizedItems : billData?.items ?? [];
+    const printableItems = normalizedItems.length > 0 ? normalizedItems : data?.items ?? [];
 
     const subtotal =
-      typeof billData?.subtotal === 'number'
-        ? billData.subtotal
+      typeof data?.subtotal === 'number'
+        ? data.subtotal
         : normalizedItems.reduce((sum, item) => sum + item.saleRate * item.qty, 0);
     const discountValue =
-      typeof billData?.discount === 'number'
-        ? billData.discount
+      typeof data?.discount === 'number'
+        ? data.discount
         : printableItems.reduce((sum, item) => {
             const mrpValue = Number.parseFloat(
               item.mrp ??
@@ -114,10 +149,10 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
 
             return sum + Math.max(mrpNumber - rateNumber, 0) * qtyNumber;
           }, 0);
-    const taxValue = typeof billData?.tax === 'number' ? billData.tax : 0;
+    const taxValue = typeof data?.tax === 'number' ? data.tax : 0;
     const totalAmount =
-      typeof billData?.total === 'number'
-        ? billData.total
+      typeof data?.total === 'number'
+        ? data.total
         : Math.max(subtotal - discountValue + taxValue, 0);
     const totalQty = normalizedItems.reduce((sum, item) => sum + item.qty, 0);
     const getRateValue = (item) => {
@@ -156,20 +191,20 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
         return sum + Math.max(mrpNumber - rateNumber, 0) * qtyNumber;
       }, 0) || 0;
     const totalSavings =
-      Number.isFinite(Number(billData?.totalSavings))
-        ? Number(billData.totalSavings)
+      Number.isFinite(Number(data?.totalSavings))
+        ? Number(data.totalSavings)
         : computedSavings;
 
     const billBy =
-      billData?.userName ??
-      billData?.billBy ??
-      billData?.cashierName ??
-      (billData?.userEmail ? billData.userEmail : '');
+      data?.userName ??
+      data?.billBy ??
+      data?.cashierName ??
+      (data?.userEmail ? data.userEmail : '');
 
     return {
-      storeName: selectedStore?.name ?? billData?.storeName ?? 'Murugan Super Market',
+      storeName: selectedStore?.name ?? data?.storeName ?? 'Murugan Super Market',
       address:
-        billData?.address ??
+        data?.address ??
         (selectedStore?.address
           ? [
               selectedStore.address.street,
@@ -179,14 +214,14 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
               .filter(Boolean)
               .join(', ')
           : ''),
-      phone: billData?.phone ?? (selectedStore?.phone ? `Ph: ${selectedStore.phone}` : ''),
-      gstNumber: billData?.gstNumber ?? selectedStore?.gstNumber ?? '',
+      phone: data?.phone ?? (selectedStore?.phone ? `Ph: ${selectedStore.phone}` : ''),
+      gstNumber: data?.gstNumber ?? selectedStore?.gstNumber ?? '',
       date: formattedDate,
       time: formattedTime,
-      billNumber: billData?.billNo ?? billData?.billNumber ?? '',
-      customerName: (billData?.customerName ?? billData?.customer_name ?? '').toString().trim(),
-      customerAddress: billData?.customerAddress ?? billData?.addressLine ?? '',
-      customerGstin: billData?.customerGstin ?? billData?.gstin ?? billData?.gstNumber ?? '',
+      billNumber: data?.billNo ?? data?.billNumber ?? '',
+      customerName: (data?.customerName ?? data?.customer_name ?? '').toString().trim(),
+      customerAddress: data?.customerAddress ?? data?.addressLine ?? '',
+      customerGstin: data?.customerGstin ?? data?.gstin ?? data?.gstNumber ?? '',
       billBy: billBy,
       subtotal,
       discountAmount: discountValue,
@@ -196,15 +231,15 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       totalSavings,
       items: printableItems,
       gstBreakdown:
-        Array.isArray(billData?.gstBreakdown) && billData.gstBreakdown.length > 0
-          ? billData.gstBreakdown
+        Array.isArray(data?.gstBreakdown) && data.gstBreakdown.length > 0
+          ? data.gstBreakdown
           : [],
-      notes: billData?.notes ?? ''
+      notes: data?.notes ?? ''
     };
-  }, [billData, selectedStore]);
+  }, [data, selectedStore]);
 
   const displayStoreName =
-    selectedStore?.name || billData?.storeName || printData.storeName || 'Murugan Super Market';
+    selectedStore?.name || data?.storeName || printData.storeName || 'Murugan Super Market';
 
   const BILL_WIDTH = 56; // Width to show all details fully including full Amount header and values (104mm paper)
   const DIVIDER_MARKER = '__DIVIDER__';
@@ -317,7 +352,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     printData.items.forEach((item = {}, index) => {
       const itemName = (item.name || '').trim();
       const sno = String(index + 1);
-      const mrpStr = currency(item.mrp || 0);
+      const mrpStr = currency(item.mrp ?? item.MRP ?? 0);
       const qtyStr = qtyFormat(item.qty || 0);
       const rateStr = currency(rateForDisplay(item));
       const amountStr = currency(item.netAmount || 0);
@@ -350,8 +385,15 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
             // Name fits on one line with numbers
             const line = `${prefix}${padRight(chunk, lastChunkMaxLen)}${numbersPart}`;
             pushLine(line.length > BILL_WIDTH ? line.substring(0, BILL_WIDTH) : line);
+          } else if (isOnlyChunk && chunk.length > lastChunkMaxLen) {
+            // Long single name: wrap like modal - first part line 1, rest of name + numbers on line 2
+            const firstPart = chunk.substring(0, PRODUCT_COL_WIDTH);
+            const restPart = chunk.substring(PRODUCT_COL_WIDTH);
+            const line1 = (prefix + firstPart).substring(0, BILL_WIDTH);
+            pushLine(line1.length < BILL_WIDTH ? padRight(line1, BILL_WIDTH) : line1);
+            pushLine('    ' + padRight(restPart, lastChunkMaxLen) + numbersPart);
           } else {
-            // Name too long to share line with numbers: full name on this line, numbers on next
+            // Multiple chunks: full last chunk on one line, numbers on next
             const nameLine = (prefix + chunk).substring(0, BILL_WIDTH);
             pushLine(nameLine.length < BILL_WIDTH ? padRight(nameLine, BILL_WIDTH) : nameLine);
             pushLine(padRight('', numbersLinePrefixLen) + numbersPart);
@@ -448,6 +490,38 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       receiptFooterAfterTotal
     };
   }, [displayStoreName, printData]);
+
+  if (!isOpen) return null;
+
+  // Render receipt text with full-width divider lines in the modal (pre content is only 56 chars wide)
+  const renderTextWithFullWidthDividers = (text, preClassName, preStyle) => {
+    if (!text) return null;
+    const lines = text.split('\n');
+    const out = [];
+    let buffer = [];
+    const flushPre = () => {
+      if (buffer.length > 0) {
+        out.push(
+          <pre key={`pre-${out.length}`} className={preClassName} style={preStyle}>
+            {buffer.join('\n')}
+          </pre>
+        );
+        buffer = [];
+      }
+    };
+    lines.forEach((line) => {
+      if (line.trim().match(/^=+$/)) {
+        flushPre();
+        out.push(
+          <div key={`div-${out.length}`} className="w-full border-t-2 border-gray-600 my-0.5 min-h-[2px]" aria-hidden />
+        );
+      } else {
+        buffer.push(line);
+      }
+    });
+    flushPre();
+    return out;
+  };
 
   const handlePrint = () => {
     const printWindow = window.open('', '_blank', 'width=400,height=400');
@@ -605,17 +679,12 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
           <div className="flex justify-center p-4 md:p-6">
             <div className="bg-white shadow-md rounded-sm border border-gray-200 w-full font-mono text-xs md:text-sm" style={{ minWidth: '320px', maxWidth: '600px' }}>
               <div className="p-4 md:p-6">
-                {receiptHeaderText && (
-                  <pre
-                    className="leading-tight bg-white text-gray-900 font-bold whitespace-pre mb-0"
-                    style={{
-                      fontFamily: "'Courier New', Courier, monospace",
-                      lineHeight: '1.3'
-                    }}
-                  >
-                    {receiptHeaderText}
-                  </pre>
-                )}
+                {receiptHeaderText &&
+                  renderTextWithFullWidthDividers(
+                    receiptHeaderText,
+                    'leading-tight bg-white text-gray-900 font-bold whitespace-pre mb-0',
+                    { fontFamily: "'Courier New', Courier, monospace", lineHeight: '1.3' }
+                  )}
                 <table className="w-full border-collapse font-bold text-gray-900" style={{ tableLayout: 'fixed' }}>
                   <thead>
                     <tr className="border-b border-gray-300">
@@ -643,10 +712,10 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
                               return withKeptSuffix;
                             })()}
                           </td>
-                          <td className="text-right py-1 pr-1 align-top">{Number(item.mrp ?? item.MRP ?? 0).toFixed(2)}</td>
+                          <td className="text-right py-1 pr-1 align-top">₹{Number(item.mrp ?? item.MRP ?? 0).toFixed(2)}</td>
                           <td className="text-right py-1 pr-1 align-top">{Number.isInteger(Number(item.qty)) ? item.qty : Number(item.qty).toFixed(2)}</td>
-                          <td className="text-right py-1 pr-1 align-top">{rate.toFixed(2)}</td>
-                          <td className="text-right py-1 align-top">{amt.toFixed(2)}</td>
+                          <td className="text-right py-1 pr-1 align-top">₹{rate.toFixed(2)}</td>
+                          <td className="text-right py-1 align-top">₹{amt.toFixed(2)}</td>
                         </tr>
                       );
                     })}
@@ -672,17 +741,12 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
                     Total: Rs. {Number(printData.totalAmount).toFixed(2)}
                   </div>
                 )}
-                {receiptFooterAfterTotal && (
-                  <pre
-                    className="leading-tight bg-white text-gray-900 font-bold whitespace-pre mt-0"
-                    style={{
-                      fontFamily: "'Courier New', Courier, monospace",
-                      lineHeight: '1.3'
-                    }}
-                  >
-                    {receiptFooterAfterTotal}
-                  </pre>
-                )}
+                {receiptFooterAfterTotal &&
+                  renderTextWithFullWidthDividers(
+                    receiptFooterAfterTotal,
+                    'leading-tight bg-white text-gray-900 font-bold whitespace-pre mt-0',
+                    { fontFamily: "'Courier New', Courier, monospace", lineHeight: '1.3' }
+                  )}
               </div>
             </div>
           </div>

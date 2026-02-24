@@ -1,5 +1,19 @@
 import { query, transaction } from '../db/index.js';
 
+// Cached check for items table (used by query(), not connection) - so we don't JOIN when table doesn't exist
+let itemsTableExistsForMrpCache = null;
+const checkItemsTableExistsForMrp = async () => {
+  if (itemsTableExistsForMrpCache !== null) return itemsTableExistsForMrpCache;
+  try {
+    await query('SELECT 1 FROM items LIMIT 1');
+    itemsTableExistsForMrpCache = true;
+  } catch (e) {
+    if (e.code === 'ER_NO_SUCH_TABLE') itemsTableExistsForMrpCache = false;
+    else throw e;
+  }
+  return itemsTableExistsForMrpCache;
+};
+
 // Helper function to check if items table exists
 const checkItemsTableExists = async (connection) => {
   try {
@@ -439,6 +453,7 @@ const CREATE_BILL_ITEMS_TABLE_SQL = `
     item_name VARCHAR(200) NOT NULL,
     quantity INT UNSIGNED NOT NULL,
     unit_price DECIMAL(12, 2) NOT NULL,
+    mrp DECIMAL(12, 2) NULL DEFAULT NULL,
     subtotal DECIMAL(12, 2) NOT NULL,
     discount DECIMAL(12, 2) NOT NULL DEFAULT 0,
     tax_rate DECIMAL(5, 2) NOT NULL DEFAULT 0,
@@ -534,6 +549,20 @@ const ensureBillingTablesExist = async () => {
     const billItemsTable = await query(BILL_ITEMS_TABLE_CHECK_QUERY);
     if (!Array.isArray(billItemsTable) || billItemsTable.length === 0) {
       await query(CREATE_BILL_ITEMS_TABLE_SQL);
+    } else {
+      try {
+        const mrpCol = await query(
+          `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bill_items' AND COLUMN_NAME = 'mrp'`
+        );
+        if (!Array.isArray(mrpCol) || mrpCol.length === 0) {
+          await query(
+            `ALTER TABLE bill_items ADD COLUMN mrp DECIMAL(12, 2) NULL DEFAULT NULL AFTER unit_price`
+          );
+        }
+      } catch (err) {
+        console.warn('Failed to add bill_items.mrp column:', err);
+      }
     }
   })().catch((error) => {
     ensureBillingTablesPromise = undefined;
@@ -572,7 +601,7 @@ const getNextBillNumber = async (connection, storeId) => {
 
 const mapBillItem = (row) => {
   if (!row) return null;
-  // Get MRP from various possible field names
+  // Get MRP from various possible field names; return only actual MRP (no substitution with selling price)
   const mrp = Number(row.mrp ?? row.MRP ?? row.max_retail_price ?? 0);
   const sellingPrice = Number(row.selling_price ?? row.unit_price ?? 0);
 
@@ -586,7 +615,7 @@ const mapBillItem = (row) => {
     unitPrice: Number(row.unit_price ?? 0),
     price: Number(row.unit_price ?? 0),
     sellingPrice: Number.isFinite(sellingPrice) ? sellingPrice : Number(row.unit_price ?? 0),
-    mrp: Number.isFinite(mrp) && mrp > 0 ? mrp : 0,
+    mrp: Number.isFinite(mrp) ? mrp : 0,
     subtotal: Number(row.subtotal ?? 0),
     discount: Number(row.discount ?? 0),
     taxRate: Number(row.tax_rate ?? 0),
@@ -675,13 +704,26 @@ export const getBillById = async (billId, { includeItems = true } = {}) => {
     return mapBill(rows[0], []);
   }
 
+  const useItemsJoin = await checkItemsTableExistsForMrp();
   const itemRows = await query(
-    `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+    useItemsJoin
+      ? `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+            COALESCE(NULLIF(bi.mrp, 0), i.mrp, P.MRP, 0) AS mrp,
             bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at,
-            NULL as mrp, NULL as MRP, NULL as max_retail_price, bi.unit_price as selling_price
-     FROM bill_items bi
-     WHERE bi.bill_id = ?
-     ORDER BY bi.id ASC`,
+            bi.unit_price as selling_price
+         FROM bill_items bi
+         LEFT JOIN items i ON (i.id = bi.item_id OR (bi.item_id IS NULL AND i.item_code = bi.item_code))
+         LEFT JOIN Products P ON P.ProductCode = bi.item_code
+         WHERE bi.bill_id = ?
+         ORDER BY bi.id ASC`
+      : `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+            COALESCE(NULLIF(bi.mrp, 0), P.MRP, 0) AS mrp,
+            bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at,
+            bi.unit_price as selling_price
+         FROM bill_items bi
+         LEFT JOIN Products P ON P.ProductCode = bi.item_code
+         WHERE bi.bill_id = ?
+         ORDER BY bi.id ASC`,
     [billId]
   );
 
@@ -772,12 +814,16 @@ export const createBill = async ({
             return Number.isFinite(numberId) && numberId > 0 ? numberId : null;
           })();
 
+          const mrpValue = Number.isFinite(Number(item.mrp)) && Number(item.mrp) >= 0
+            ? Number(Number(item.mrp).toFixed(2))
+            : null;
           return {
             itemId: parsedItemId,
             itemCode: item.itemCode ?? item.item_code ?? item.sku ?? null,
             itemName: item.itemName ?? item.name ?? 'Unnamed Item',
             quantity,
             unitPrice: Number(unitPrice.toFixed(2)),
+            mrp: mrpValue,
             subtotal: subtotalValue,
             discount: discountApplied,
             taxRate: Number(taxRateValue.toFixed(2)),
@@ -789,7 +835,7 @@ export const createBill = async ({
 
     if (normalizedItems.length > 0) {
       const placeholders = normalizedItems
-        .map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .join(', ');
       const values = normalizedItems.flatMap((item) => [
         result.insertId,
@@ -798,6 +844,7 @@ export const createBill = async ({
         item.itemName,
         item.quantity,
         item.unitPrice,
+        item.mrp,
         item.subtotal,
         item.discount,
         item.taxRate,
@@ -812,6 +859,7 @@ export const createBill = async ({
           item_name,
           quantity,
           unit_price,
+          mrp,
           subtotal,
           discount,
           tax_rate,
@@ -859,13 +907,25 @@ export const createBill = async ({
       [result.insertId]
     );
 
+    const itemsTableExists = await checkItemsTableExists(connection);
     const itemsRows = normalizedItems.length
       ? await connection.query(
-        `SELECT id, bill_id, item_id, item_code, item_name, quantity, unit_price,
-                  subtotal, discount, tax_rate, total, created_at
-           FROM bill_items
-           WHERE bill_id = ?
-           ORDER BY id ASC`,
+        itemsTableExists
+          ? `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+                  COALESCE(NULLIF(bi.mrp, 0), i.mrp, P.MRP, 0) AS mrp,
+                  bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at
+             FROM bill_items bi
+             LEFT JOIN items i ON (i.id = bi.item_id OR (bi.item_id IS NULL AND i.item_code = bi.item_code))
+             LEFT JOIN Products P ON P.ProductCode = bi.item_code
+             WHERE bi.bill_id = ?
+             ORDER BY bi.id ASC`
+          : `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+                  COALESCE(NULLIF(bi.mrp, 0), P.MRP, 0) AS mrp,
+                  bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at
+             FROM bill_items bi
+             LEFT JOIN Products P ON P.ProductCode = bi.item_code
+             WHERE bi.bill_id = ?
+             ORDER BY bi.id ASC`,
         [result.insertId]
       )
       : [[], []];
@@ -932,13 +992,26 @@ export const getBillByBillNo = async (billNo, { includeItems = true } = {}) => {
     return mapBill(rows[0], []);
   }
 
+  const useItemsJoin = await checkItemsTableExistsForMrp();
   const itemRows = await query(
-    `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+    useItemsJoin
+      ? `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+            COALESCE(NULLIF(bi.mrp, 0), i.mrp, P.MRP, 0) AS mrp,
             bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at,
-            NULL as mrp, NULL as MRP, NULL as max_retail_price, bi.unit_price as selling_price
-     FROM bill_items bi
-     WHERE bi.bill_id = ?
-     ORDER BY bi.id ASC`,
+            bi.unit_price as selling_price
+         FROM bill_items bi
+         LEFT JOIN items i ON (i.id = bi.item_id OR (bi.item_id IS NULL AND i.item_code = bi.item_code))
+         LEFT JOIN Products P ON P.ProductCode = bi.item_code
+         WHERE bi.bill_id = ?
+         ORDER BY bi.id ASC`
+      : `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+            COALESCE(NULLIF(bi.mrp, 0), P.MRP, 0) AS mrp,
+            bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at,
+            bi.unit_price as selling_price
+         FROM bill_items bi
+         LEFT JOIN Products P ON P.ProductCode = bi.item_code
+         WHERE bi.bill_id = ?
+         ORDER BY bi.id ASC`,
     [rows[0].id]
   );
 

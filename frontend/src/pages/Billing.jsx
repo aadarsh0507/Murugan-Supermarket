@@ -1332,14 +1332,13 @@ export default function Billing() {
               if (!local && Array.isArray(billToSave.items) && billToSave.items.length === printableBill.items.length) {
                 local = billToSave.items[idx];
               }
-              // Prioritize local MRP (from bill screen) over API MRP to ensure consistency
-              // The local MRP is what the user entered/saw in the bill screen
-              // Use local MRP if it exists (even if 0), only fall back to API MRP if local is missing
+              // Prefer API MRP (what was saved) so receipt shows correct stored MRP
+              // Only use local MRP when API didn't return one (e.g. legacy bills)
               const mrp =
-                local?.mrp !== undefined && local?.mrp !== null && Number.isFinite(Number(local.mrp))
-                  ? Number(local.mrp)
-                  : Number.isFinite(Number(it.mrp))
-                    ? Number(it.mrp)
+                Number.isFinite(Number(it.mrp)) && Number(it.mrp) >= 0
+                  ? Number(it.mrp)
+                  : local?.mrp !== undefined && local?.mrp !== null && Number.isFinite(Number(local.mrp))
+                    ? Number(local.mrp)
                     : 0;
               const sellingPrice =
                 Number.isFinite(Number(it.sellingPrice))

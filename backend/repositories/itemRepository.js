@@ -278,7 +278,7 @@ const mapItem = (row) => {
     costPrice: Number(row.cost_price),
     sellingPrice: Number(row.selling_price),
     price: Number(row.selling_price ?? 0),
-    mrp: Number(row.mrp),
+    mrp: Number(row.mrp ?? 0),
     reorderLevel: Number(row.reorder_level ?? 0),
     gstRate: Number(row.gst_rate ?? 0),
     hsnCode: row.hsn_code,
@@ -373,22 +373,22 @@ const listItemsFromItemsTable = async ({
   const params = [];
 
   if (search) {
-    filters.push('(name LIKE ? OR item_code LIKE ? OR barcode LIKE ?)');
+    filters.push('(i.name LIKE ? OR i.item_code LIKE ? OR i.barcode LIKE ?)');
     params.push(`%${search}%`, `%${search}%`, `%${search}%`);
   }
 
   if (categoryId) {
-    filters.push('category_id = ?');
+    filters.push('i.category_id = ?');
     params.push(categoryId);
   }
 
   if (subcategoryId) {
-    filters.push('subcategory_id = ?');
+    filters.push('i.subcategory_id = ?');
     params.push(subcategoryId);
   }
 
   if (isActive !== undefined) {
-    filters.push('is_active = ?');
+    filters.push('i.is_active = ?');
     params.push(isActive ? 1 : 0);
   }
 
@@ -403,7 +403,7 @@ const listItemsFromItemsTable = async ({
     `);
     
     if (storeIdColumnCheck.length > 0) {
-      filters.push('store_id = ?');
+      filters.push('i.store_id = ?');
       params.push(storeId);
     }
   }
@@ -411,18 +411,22 @@ const listItemsFromItemsTable = async ({
   const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
   const rows = await query(
-    `SELECT id, item_code, name, description, brand, category_id, subcategory_id,
-            unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-            gst_rate, hsn_code, barcode, notes, is_active, created_at, updated_at
-     FROM items
+    `SELECT i.id, i.item_code, i.name, i.description, i.brand, i.category_id, i.subcategory_id,
+            i.unit, i.cost_price, i.selling_price,
+            COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
+            i.reorder_level, i.min_stock, i.max_stock,
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+     FROM items i
+     LEFT JOIN Products P ON P.ProductCode = i.item_code
      ${whereClause}
-     ORDER BY created_at DESC
+     ORDER BY i.created_at DESC
      LIMIT ? OFFSET ?`,
     [...params, limit, offset]
   );
 
+  const countWhere = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
   const countRows = await query(
-    `SELECT COUNT(*) AS total FROM items ${whereClause}`,
+    `SELECT COUNT(*) AS total FROM items i ${countWhere}`,
     params
   );
 
@@ -601,11 +605,14 @@ const listItemsFromProductsTable = async ({
 
 const getItemByIdFromItemsTable = async (itemId) => {
   const rows = await query(
-    `SELECT id, item_code, name, description, brand, category_id, subcategory_id,
-            unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-            gst_rate, hsn_code, barcode, notes, is_active, created_at, updated_at
-     FROM items
-     WHERE id = ?
+    `SELECT i.id, i.item_code, i.name, i.description, i.brand, i.category_id, i.subcategory_id,
+            i.unit, i.cost_price, i.selling_price,
+            COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
+            i.reorder_level, i.min_stock, i.max_stock,
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+     FROM items i
+     LEFT JOIN Products P ON P.ProductCode = i.item_code
+     WHERE i.id = ?
      LIMIT 1`,
     [itemId]
   );
@@ -645,17 +652,23 @@ const getItemByIdFromProductsTable = async (itemId) => {
 
 const findItemByBarcodeInItemsTable = async (barcodeOrCode) => {
   const rows = await query(
-    `SELECT id, item_code, name, description, brand, category_id, subcategory_id,
-            unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-            gst_rate, hsn_code, barcode, notes, is_active, created_at, updated_at
-     FROM items
-     WHERE barcode = ? OR item_code = ?
+    `SELECT i.id, i.item_code, i.name, i.description, i.brand, i.category_id, i.subcategory_id,
+            i.unit, i.cost_price, i.selling_price,
+            COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
+            i.reorder_level, i.min_stock, i.max_stock,
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+     FROM items i
+     LEFT JOIN Products P ON P.ProductCode = i.item_code
+     WHERE i.barcode = ? OR i.item_code = ?
      LIMIT 1`,
     [barcodeOrCode, barcodeOrCode]
   );
 
   if (rows.length === 0) return null;
-  return mapItem(rows[0]);
+  const baseItem = mapItem(rows[0]);
+  const code = String(baseItem.itemCode ?? baseItem.id ?? barcodeOrCode);
+  const overrides = await fetchOverridesForCodes([code]);
+  return applyOverrideToItem(baseItem, overrides.get(code));
 };
 
 const findItemByBarcodeInProductsTable = async (barcodeOrCode) => {
