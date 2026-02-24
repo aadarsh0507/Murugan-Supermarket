@@ -39,16 +39,31 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
                 item.unitPrice ??
                 item.price
             ) ?? 0;
-          // MRP should be the item's MRP as in Items screen (with safe fallbacks if API omits it).
-          // Check multiple possible field names for MRP
-          const mrp =
-            toNumber(
-              item.mrp ??
-                item.MRP ??
-                item.maxRetailPrice ??
-                item.max_retail_price ??
-                0
-            ) ?? 0;
+          // MRP should be the item's MRP as saved in the bill - check all possible field names
+          // Priority: mrp > MRP > maxRetailPrice > max_retail_price
+          // Don't use price fields (originalPrice, Price) as they might be different
+          let mrp = null;
+          
+          // Check all possible MRP field names in order of priority
+          if (item.mrp !== undefined && item.mrp !== null) {
+            mrp = toNumber(item.mrp);
+          } else if (item.MRP !== undefined && item.MRP !== null) {
+            mrp = toNumber(item.MRP);
+          } else if (item.maxRetailPrice !== undefined && item.maxRetailPrice !== null) {
+            mrp = toNumber(item.maxRetailPrice);
+          } else if (item.max_retail_price !== undefined && item.max_retail_price !== null) {
+            mrp = toNumber(item.max_retail_price);
+          }
+          
+          // If MRP is found and valid, use it (even if 0, as that might be the actual value)
+          // Only use selling price as fallback if MRP field was completely missing
+          if (mrp === null) {
+            mrp = sellingPrice > 0 ? sellingPrice : 0;
+          } else if (mrp < 0) {
+            // If MRP is negative (invalid), use selling price
+            mrp = sellingPrice > 0 ? sellingPrice : 0;
+          }
+          
           const discount = Number.isFinite(Number.parseFloat(item.discount))
             ? Number.parseFloat(item.discount)
             : 0;
@@ -58,7 +73,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
 
           return {
             name: item.itemName ?? item.name ?? 'Item',
-            mrp: mrp > 0 ? mrp : 0, // Ensure MRP is always a valid number
+            mrp: mrp, // Use the actual MRP value from the bill data
             // saleRate is used as "Rate" in print; set to selling price
             saleRate: sellingPrice,
             price: sellingPrice,
@@ -169,7 +184,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       date: formattedDate,
       time: formattedTime,
       billNumber: billData?.billNo ?? billData?.billNumber ?? '',
-      customerName: billData?.customerName ?? '',
+      customerName: (billData?.customerName ?? billData?.customer_name ?? '').toString().trim(),
       customerAddress: billData?.customerAddress ?? billData?.addressLine ?? '',
       customerGstin: billData?.customerGstin ?? billData?.gstin ?? billData?.gstNumber ?? '',
       billBy: billBy,
@@ -191,7 +206,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
   const displayStoreName =
     selectedStore?.name || billData?.storeName || printData.storeName || 'Murugan Super Market';
 
-  const BILL_WIDTH = 48; // Increased width for better readability
+  const BILL_WIDTH = 56; // Width to show all details fully including full Amount header and values (104mm paper)
   const DIVIDER_MARKER = '__DIVIDER__';
 
   const escapeHtml = (value = '') => {
@@ -224,6 +239,15 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     return `${' '.repeat(width - str.length)}${str}`;
   };
 
+  const padCenter = (text = '', width = 0) => {
+    const str = text.toString();
+    if (str.length >= width) return str.slice(0, width);
+    const padding = width - str.length;
+    const left = Math.floor(padding / 2);
+    const right = padding - left;
+    return `${' '.repeat(left)}${str}${' '.repeat(right)}`;
+  };
+
   const currency = (value = 0) => {
     const num = Number(value);
     return Number.isFinite(num) ? num.toFixed(2) : '0.00';
@@ -235,7 +259,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     return Number.isInteger(num) ? num.toString() : num.toFixed(2);
   };
 
-    const { formattedText, formattedHtml } = useMemo(() => {
+    const { formattedText, formattedHtml, receiptHeaderText, receiptFooterText, receiptFooterBeforeTotal, receiptFooterAfterTotal } = useMemo(() => {
     const lines = [];
     const pushLine = (value = '') => lines.push(value);
     const divider = () => pushLine(DIVIDER_MARKER);
@@ -272,35 +296,91 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     pushLine(billUserLine.substring(0, BILL_WIDTH));
     pushLine(`Cus. Name: ${padRight(printData.customerName || '-', BILL_WIDTH - 11)}`);
     divider();
-    const headerLine = `${padRight('SNo', 3)} ${padRight('Product', 15)} ${padLeft('MRP', 7)} ${padLeft('Qty', 4)} ${padLeft('Rate', 7)} ${padLeft('Amount', 7)}`;
-    // Ensure header line doesn't exceed BILL_WIDTH
-    pushLine(headerLine.substring(0, BILL_WIDTH));
+    // Header with proper column widths: SNo(3) Product(24) MRP(6) Qty(4) Rate(7) Amount(7)
+    // Total: 3+1+24+1+6+1+4+1+7+1+7 = 56 characters (perfect fit for 104mm paper with extra space at end)
+    // All numeric columns (SNo, MRP, Qty, Rate, Amount) should be right-aligned
+    // Product shows full name: one line if ≤24 chars, else wrapped with numbers on last line
+    const PRODUCT_COL_WIDTH = 24;
+    const MRP_START = 3 + 1 + PRODUCT_COL_WIDTH + 1; // 29 - column start for MRP
+    const numbersLinePrefixLen = MRP_START; // spaces before MRP on continuation line
+    const lastChunkMaxLen = numbersLinePrefixLen - 4; // 25 - "    " (4) + product part before numbers
+    const firstChunkMaxLen = 52; // 56 - 4 for "  1 " so first line stays ≤ BILL_WIDTH
+    const headerLine = `${padLeft('SNo', 3)} ${padRight('Product', 24)} ${padLeft('MRP', 6)} ${padLeft('Qty', 4)} ${padLeft('Rate', 7)} ${padLeft('Amount', 7)}`;
+    pushLine(headerLine);
     divider();
+    pushLine('');
     const rateForDisplay = (item = {}) => {
-      // Display saleRate (selling price) for the Rate column
       const parsed = Number.parseFloat(item.saleRate);
       return Number.isFinite(parsed) ? parsed : 0;
     };
 
     printData.items.forEach((item = {}, index) => {
-      const itemName = item.name || '';
-      // Truncate long product names to maintain alignment
-      const truncatedName = itemName.length > 15 ? itemName.substring(0, 12) + '...' : itemName;
-      const itemLine = `${padRight(index + 1, 3)} ${padRight(truncatedName, 15)} ${padLeft(currency(item.mrp || 0), 7)} ${padLeft(qtyFormat(item.qty || 0), 4)} ${padLeft(currency(rateForDisplay(item)), 7)} ${padLeft(currency(item.netAmount || 0), 7)}`;
-      // Ensure line doesn't exceed BILL_WIDTH
-      pushLine(itemLine.substring(0, BILL_WIDTH));
+      const itemName = (item.name || '').trim();
+      const sno = String(index + 1);
+      const mrpStr = currency(item.mrp || 0);
+      const qtyStr = qtyFormat(item.qty || 0);
+      const rateStr = currency(rateForDisplay(item));
+      const amountStr = currency(item.netAmount || 0);
+      const numbersPart = `${padLeft(mrpStr, 6)} ${padLeft(qtyStr, 4)} ${padLeft(rateStr, 7)} ${padLeft(amountStr, 7)}`;
+
+      if (itemName.length <= PRODUCT_COL_WIDTH) {
+        const itemLine = `${padLeft(sno, 3)} ${padRight(itemName, 24)} ${numbersPart}`;
+        pushLine(itemLine);
+        return;
+      }
+
+      // Full product name: wrap so we never truncate. Numbers on same line only when name fits in 25 chars.
+      const chunks = [];
+      if (itemName.length <= firstChunkMaxLen) {
+        chunks.push(itemName);
+      } else {
+        chunks.push(itemName.substring(0, firstChunkMaxLen));
+        let pos = firstChunkMaxLen;
+        while (pos < itemName.length) {
+          chunks.push(itemName.substring(pos, Math.min(pos + lastChunkMaxLen, itemName.length)));
+          pos += lastChunkMaxLen;
+        }
+      }
+      chunks.forEach((chunk, i) => {
+        const isLast = i === chunks.length - 1;
+        const isOnlyChunk = chunks.length === 1;
+        if (isLast) {
+          const prefix = isOnlyChunk ? `${padLeft(sno, 3)} ` : '    ';
+          if (chunk.length <= lastChunkMaxLen && isOnlyChunk) {
+            // Name fits on one line with numbers
+            const line = `${prefix}${padRight(chunk, lastChunkMaxLen)}${numbersPart}`;
+            pushLine(line.length > BILL_WIDTH ? line.substring(0, BILL_WIDTH) : line);
+          } else {
+            // Name too long to share line with numbers: full name on this line, numbers on next
+            const nameLine = (prefix + chunk).substring(0, BILL_WIDTH);
+            pushLine(nameLine.length < BILL_WIDTH ? padRight(nameLine, BILL_WIDTH) : nameLine);
+            pushLine(padRight('', numbersLinePrefixLen) + numbersPart);
+          }
+        } else {
+          const prefix = i === 0 ? `${padLeft(sno, 3)} ` : '    ';
+          const wrapLine = (prefix + chunk).substring(0, BILL_WIDTH);
+          pushLine(wrapLine.length < BILL_WIDTH ? padRight(wrapLine, BILL_WIDTH) : wrapLine);
+        }
+      });
     });
+    // Add a blank line after items for better spacing
+    pushLine('');
     divider();
     const totalQtyDisplay =
       Number.isFinite(Number(printData.totalQty)) && Number(printData.totalQty) > 0
         ? Number(printData.totalQty)
         : printData.items.length;
-    // Align totals properly
+    // Align totals properly - Amount column ends at position: 3+1+24+1+6+1+4+1+7 = 48
+    // Amount column width is 7, so it spans positions 48-55 (0-indexed: 48-54)
+    // Total text should align with Amount column (right-aligned at position 55)
     const totalItemText = `Total Item: ${totalQtyDisplay}`;
     const totalText = `Total: Rs. ${currency(printData.totalAmount)}`;
-    const totalLineContent = totalItemText + totalText;
-    const totalLinePadding = Math.max(0, BILL_WIDTH - totalLineContent.length);
-    const totalLine = `${totalItemText}${' '.repeat(totalLinePadding)}${totalText}`;
+    // Calculate padding to align Total with Amount column (right edge at position 55)
+    const amountColumnStart = 3 + 1 + 24 + 1 + 6 + 1 + 4 + 1 + 7; // 48
+    const amountColumnEnd = amountColumnStart + 7; // 55
+    const totalTextStart = amountColumnEnd - totalText.length;
+    const paddingNeeded = Math.max(0, totalTextStart - totalItemText.length);
+    const totalLine = `${totalItemText}${' '.repeat(paddingNeeded)}${totalText}`;
     // Ensure line doesn't exceed BILL_WIDTH
     pushLine(totalLine.substring(0, BILL_WIDTH));
     if (printData.totalSavings > 0) {
@@ -335,7 +415,38 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       })
       .join('');
 
-    return { formattedText: text, formattedHtml: html };
+    // Split for modal: header, item line range, footer (so we can render items as a table in the modal)
+    // End header before the "SNo Product..." line so the modal shows only the table header (no duplicate)
+    const headerEnd = lines.findIndex((l) => typeof l === 'string' && l.includes('SNo') && l.includes('Product'));
+    const footerStart = lines.findIndex((l) => typeof l === 'string' && l.includes('Total Item'));
+    const footerLines = footerStart >= 0 ? lines.slice(footerStart) : [];
+    const mapLine = (line) => (line === DIVIDER_MARKER ? '='.repeat(BILL_WIDTH) : line);
+    const receiptHeaderText =
+      headerEnd > 0
+        ? lines
+            .slice(0, headerEnd)
+            .map(mapLine)
+            .join('\n')
+        : '';
+    const receiptFooterText =
+      footerLines.length > 0 ? footerLines.map(mapLine).join('\n') : '';
+    // For modal: show only "Total: Rs." line in larger bold; rest of footer unchanged
+    const firstFooterLine = footerLines[0];
+    const receiptFooterBeforeTotal =
+      typeof firstFooterLine === 'string'
+        ? firstFooterLine.replace(/\s*Total: Rs\.\s*[\d.]+$/, '').trimEnd()
+        : '';
+    const receiptFooterAfterTotal =
+      footerLines.length > 1 ? footerLines.slice(1).map(mapLine).join('\n') : '';
+
+    return {
+      formattedText: text,
+      formattedHtml: html,
+      receiptHeaderText,
+      receiptFooterText,
+      receiptFooterBeforeTotal,
+      receiptFooterAfterTotal
+    };
   }, [displayStoreName, printData]);
 
   const handlePrint = () => {
@@ -361,7 +472,7 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
           <title>Bill - ${printData.billNumber}</title>
           <style>
             @page {
-              size: 72mm auto; /* Fixed width, variable height */
+              size: 104mm auto;
               margin: 0;
               padding: 0;
             }
@@ -369,35 +480,37 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
               margin: 0;
               padding: 0;
               box-sizing: border-box;
+              -webkit-print-color-adjust: exact;
+              print-color-adjust: exact;
             }
             body { 
               margin: 0; 
               padding: 0; 
-              font-family: "Times New Roman", Times, serif; 
-              font-size: 10px;
-              line-height: 1.4;
+              font-family: "Courier New", Courier, monospace; 
+              font-size: 11px;
+              line-height: 1.25;
               font-weight: bold;
               color: #000000;
               background: #FFFFFF;
-              width: 72mm;
-              max-width: 72mm;
+              width: 104mm;
+              max-width: 104mm;
             }
             .bill-content {
-              width: 100%;
-              max-width: 68mm;
-              margin: 0 auto;
-              padding: 4px 4px 8px 4px;
+              width: 98mm;
+              max-width: 98mm;
+              margin: 0 3mm;
+              padding: 4px 0 4px 0;
               box-sizing: border-box;
-              font-family: "Times New Roman", Times, serif;
-              font-size: 10px;
-              line-height: 1.4;
+              font-family: "Courier New", Courier, monospace;
+              font-size: 11px;
+              line-height: 1.25;
               font-weight: bold;
               color: #000000;
               background: #FFFFFF;
               white-space: pre;
               word-break: keep-all;
               overflow-wrap: normal;
-              text-align: center;
+              text-align: left;
             }
             .printer-commands {
               display: none;
@@ -406,35 +519,44 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
             }
             @media print {
               @page {
-                size: 72mm auto;
-                margin: 0;
-                padding: 0;
+                size: 104mm auto;
+                margin: 0 !important;
+                padding: 0 !important;
               }
-              body { 
-                margin: 0; 
-                padding: 0;
-                width: 72mm;
-                max-width: 72mm;
-                font-family: "Times New Roman", Times, serif;
-                font-weight: bold;
-                color: #000000;
-                background: #FFFFFF;
+              * {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+              }
+              html, body { 
+                margin: 0 !important; 
+                padding: 0 !important;
+                width: 104mm !important;
+                max-width: 104mm !important;
+                min-width: 104mm !important;
+                font-family: "Courier New", Courier, monospace !important;
+                font-size: 11px !important;
+                line-height: 1.25 !important;
+                font-weight: bold !important;
+                color: #000000 !important;
+                background: #FFFFFF !important;
               }
               .bill-content { 
-                padding: 4px 4px 8px 4px;
-                width: 100%;
-                max-width: 68mm;
-                margin: 0 auto;
-                font-family: "Times New Roman", Times, serif;
-                font-size: 10px;
-                line-height: 1.4;
-                font-weight: bold;
-                color: #000000;
-                background: #FFFFFF;
-                white-space: pre;
-                word-break: keep-all;
-                overflow-wrap: normal;
-                text-align: center;
+                padding: 4px 0 4px 0 !important;
+                width: 98mm !important;
+                max-width: 98mm !important;
+                min-width: 98mm !important;
+                margin: 0 3mm !important;
+                font-family: "Courier New", Courier, monospace !important;
+                font-size: 11px !important;
+                line-height: 1.25 !important;
+                font-weight: bold !important;
+                color: #000000 !important;
+                background: #FFFFFF !important;
+                white-space: pre !important;
+                word-break: keep-all !important;
+                overflow-wrap: normal !important;
+                text-align: left !important;
+                transform: scale(1) !important;
               }
               /* Force page break and cut after content */
               .printer-commands {
@@ -478,26 +600,90 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
           </div>
         </div>
 
-        {/* Bill Content - Mobile Responsive */}
+        {/* Bill Content - Mobile Responsive: table for items so Product column stays aligned */}
         <div className="overflow-y-auto max-h-[calc(95vh-80px)] bg-gray-50 flex-1">
           <div className="flex justify-center p-4 md:p-6">
-            <div className="bg-white shadow-md rounded-sm border border-gray-200 w-full" style={{ minWidth: '320px', maxWidth: '500px' }}>
-              <pre
-                id="bill-content"
-                className="p-4 md:p-6 font-mono text-xs md:text-sm leading-tight bg-white text-gray-900 overflow-x-auto"
-                style={{
-                  fontFamily: "'Times New Roman', Times, serif",
-                  fontWeight: 'bold',
-                  letterSpacing: '0.02em',
-                  whiteSpace: 'pre',
-                  wordBreak: 'keep-all',
-                  overflowWrap: 'normal',
-                  lineHeight: '1.4',
-                  textAlign: 'center'
-                }}
-              >
-{formattedText}
-              </pre>
+            <div className="bg-white shadow-md rounded-sm border border-gray-200 w-full font-mono text-xs md:text-sm" style={{ minWidth: '320px', maxWidth: '600px' }}>
+              <div className="p-4 md:p-6">
+                {receiptHeaderText && (
+                  <pre
+                    className="leading-tight bg-white text-gray-900 font-bold whitespace-pre mb-0"
+                    style={{
+                      fontFamily: "'Courier New', Courier, monospace",
+                      lineHeight: '1.3'
+                    }}
+                  >
+                    {receiptHeaderText}
+                  </pre>
+                )}
+                <table className="w-full border-collapse font-bold text-gray-900" style={{ tableLayout: 'fixed' }}>
+                  <thead>
+                    <tr className="border-b border-gray-300">
+                      <th className="text-left py-1 pr-1 w-8">SNo</th>
+                      <th className="text-left py-1 pr-2" style={{ width: '45%', minWidth: '10ch' }}>Product</th>
+                      <th className="text-right py-1 pr-1 w-14">MRP</th>
+                      <th className="text-right py-1 pr-1 w-10">Qty</th>
+                      <th className="text-right py-1 pr-1 w-14">Rate</th>
+                      <th className="text-right py-1 w-14">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(printData.items || []).map((item, index) => {
+                      const rate = Number.isFinite(Number(item.saleRate)) ? Number(item.saleRate) : Number(item.price) || 0;
+                      const amt = Number.isFinite(Number(item.netAmount)) ? Number(item.netAmount) : (item.qty || 1) * rate;
+                      return (
+                        <tr key={index} className="border-b border-gray-100">
+                          <td className="py-1 pr-1 align-top">{index + 1}</td>
+                          <td className="py-1 pr-2 align-top break-words" style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}>
+                            {(() => {
+                              const name = (item.name || 'Item').trim();
+                              // Keep "FCOFFEE 200G" (or similar product + weight) on same line when wrapping:
+                              // use non-breaking space before trailing weight/size (e.g. 200G, 1L, 500G)
+                              const withKeptSuffix = name.replace(/\s+(\d+(?:\.\d+)?\s*(?:G|ML|L|KG|GM|ML)\s*)$/i, '\u00A0$1');
+                              return withKeptSuffix;
+                            })()}
+                          </td>
+                          <td className="text-right py-1 pr-1 align-top">{Number(item.mrp ?? item.MRP ?? 0).toFixed(2)}</td>
+                          <td className="text-right py-1 pr-1 align-top">{Number.isInteger(Number(item.qty)) ? item.qty : Number(item.qty).toFixed(2)}</td>
+                          <td className="text-right py-1 pr-1 align-top">{rate.toFixed(2)}</td>
+                          <td className="text-right py-1 align-top">{amt.toFixed(2)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                {/* Footer: only "Total: Rs." in larger bold, rest unchanged */}
+                {(receiptFooterBeforeTotal || receiptFooterAfterTotal) && (
+                  <pre
+                    className="leading-tight bg-white text-gray-900 font-bold whitespace-pre mt-0 mb-0"
+                    style={{
+                      fontFamily: "'Courier New', Courier, monospace",
+                      lineHeight: '1.3'
+                    }}
+                  >
+                    {receiptFooterBeforeTotal}
+                  </pre>
+                )}
+                {receiptFooterText && (
+                  <div
+                    className="font-bold text-base md:text-lg text-gray-900 font-mono text-right"
+                    style={{ fontFamily: "'Courier New', Courier, monospace" }}
+                  >
+                    Total: Rs. {Number(printData.totalAmount).toFixed(2)}
+                  </div>
+                )}
+                {receiptFooterAfterTotal && (
+                  <pre
+                    className="leading-tight bg-white text-gray-900 font-bold whitespace-pre mt-0"
+                    style={{
+                      fontFamily: "'Courier New', Courier, monospace",
+                      lineHeight: '1.3'
+                    }}
+                  >
+                    {receiptFooterAfterTotal}
+                  </pre>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -1,6 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Plus, Save, Search, Trash2, X, Loader2, Receipt, ScanBarcode, Printer } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { Plus, Save, Trash2, X, Loader2, Receipt, ScanBarcode, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -24,8 +23,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { billsAPI, itemsAPI } from "@/services/api";
-import { useDebounce } from "@/hooks/useDebounce";
+import { billsAPI, itemsAPI, categoriesAPI } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
 import BillModal from "@/components/BillModal";
 
@@ -72,6 +70,14 @@ const normalizeItem = (item = {}) => {
       item.MRP ??
       0
   );
+  
+  // GST rate from item
+  const gstRate = Number(
+    item.gstRate ??
+    item.gst_rate ??
+    item.taxRate ??
+    0
+  );
 
   return {
     sourceId,
@@ -84,6 +90,9 @@ const normalizeItem = (item = {}) => {
       : Number.isFinite(unitPrice)
       ? unitPrice
       : 0,
+    hsnCode: item.hsnCode ?? item.hsn_code ?? item.CommodityCode ?? "",
+    gstRate: Number.isFinite(gstRate) ? gstRate : 0,
+    batch: item.batch ?? item.batchNumber ?? "",
   };
 };
 
@@ -233,7 +242,15 @@ const loadSavedState = () => {
             name: line.name,
             sku: line.sku,
             price: Number(line.price || 0),
-            quantity: Number.isFinite(line.quantity) ? line.quantity : 1
+            mrp: Number(line.mrp || 0),
+            quantity: Number.isFinite(line.quantity) ? line.quantity : 1,
+            hsnCode: line.hsnCode || "",
+            gstRate: Number(line.gstRate || 0),
+            batch: line.batch || "",
+            cessAmount: Number(line.cessAmount || 0),
+            sgstAmount: line.sgstAmount !== undefined ? Number(line.sgstAmount) : undefined,
+            cgstAmount: line.cgstAmount !== undefined ? Number(line.cgstAmount) : undefined,
+            gstAmount: line.gstAmount !== undefined ? Number(line.gstAmount) : undefined,
           }))
         : []
     }));
@@ -269,18 +286,39 @@ export default function Billing() {
   const [activeBillId, setActiveBillId] = useState(
     initialStateRef.current.activeBillId || initialStateRef.current.bills[0]?.id
   );
-  const [searchTerm, setSearchTerm] = useState("");
   const [barcodeValue, setBarcodeValue] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [scanError, setScanError] = useState(null);
   const barcodeInputRef = useRef(null);
+  const [newItemRow, setNewItemRow] = useState({
+    sku: "",
+    name: "",
+    quantity: 1,
+    batch: "",
+    price: 0,
+    mrp: 0,
+    gstRate: 0,
+    cessAmount: 0,
+    sgstAmount: 0,
+    cgstAmount: 0,
+    gstAmount: 0,
+    hsnCode: "",
+  });
+  const [itemSearchTerm, setItemSearchTerm] = useState("");
+  const [showSearchDropdown, setShowSearchDropdown] = useState(false);
+  const [searchField, setSearchField] = useState(null); // 'sku' or 'name'
+  const searchInputRef = useRef(null);
+  const skuInputRef = useRef(null);
+  const nameInputRef = useRef(null);
+  const quantityInputRef = useRef(null);
   const [recentBills, setRecentBills] = useState([]);
   const [printModalState, setPrintModalState] = useState({ isOpen: false, bill: null });
   const [isFetchingBill, setIsFetchingBill] = useState(false);
   const [fetchBillError, setFetchBillError] = useState(null);
   const [isReprintModalOpen, setIsReprintModalOpen] = useState(false);
-
-  const debouncedSearch = useDebounce(searchTerm, 300);
+  const [allItems, setAllItems] = useState([]); // Preloaded items for instant suggestions
+  const [itemsLoading, setItemsLoading] = useState(false);
+  const [dropdownPosition, setDropdownPosition] = useState({ top: 0, left: 0, width: 0, maxHeight: 400 });
 
   const focusBarcodeInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -288,36 +326,283 @@ export default function Billing() {
     });
   }, []);
 
-  const {
-    data: searchResponse,
-    isFetching: isSearching,
-    error: searchError,
-  } = useQuery({
-    queryKey: ["billing-items", debouncedSearch],
-    queryFn: async () => {
-      const params = { limit: 50 };
-      if (debouncedSearch.trim()) {
-        params.q = debouncedSearch.trim();
-      }
-      const response = await itemsAPI.getItems(params);
-      return (
-        response?.data?.items ??
-        response?.items ??
-        response?.data ??
-        response ??
-        []
-      );
-    },
-  });
+  const updateDropdownPosition = useCallback(() => {
+    // Get the active input element based on searchField
+    let inputEl = null;
+    if (searchField === 'name' && nameInputRef.current) {
+      inputEl = nameInputRef.current;
+    } else if (searchField === 'sku' && skuInputRef.current) {
+      inputEl = skuInputRef.current;
+    }
+    
+    if (!inputEl) return;
+    
+    const rect = inputEl.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+    const spaceBelow = viewportHeight - rect.bottom;
+    const spaceAbove = rect.top;
+    
+    // Calculate optimal height (leave some margin)
+    const maxDropdownHeight = Math.min(500, Math.max(spaceBelow - 20, spaceAbove - 20, 300));
+    
+    // Determine if we should show above or below
+    const showAbove = spaceBelow < 300 && spaceAbove > spaceBelow;
+    
+    setDropdownPosition({
+      top: showAbove 
+        ? rect.top + window.scrollY - maxDropdownHeight - 4
+        : rect.bottom + window.scrollY + 4,
+      left: rect.left + window.scrollX,
+      width: Math.max(rect.width, 400),
+      maxHeight: maxDropdownHeight
+    });
+  }, [searchField]);
 
-  const searchResults = useMemo(() => {
-    const items = Array.isArray(searchResponse) ? searchResponse : [];
-    return items.map((item) => normalizeItem(item));
-  }, [searchResponse]);
+  // Fetch all items for client-side filtering (like Purchase Orders)
+  const fetchAllItems = useCallback(async () => {
+    const aggregated = [];
+    const limit = 200; // backend hard limit per page
+    let cursor = 0;
+    let hasNext = true;
+    let guard = 0;
+
+    while (hasNext && guard < 1000) {
+      const params = { limit, cursor };
+      const storeId = selectedStore?.id || selectedStore?._id;
+      if (storeId) {
+        params.storeId = storeId;
+      }
+      const res = await itemsAPI.getItems(params);
+      const pageItems = res?.data?.items || res?.items || res?.data || [];
+      if (Array.isArray(pageItems)) {
+        aggregated.push(...pageItems);
+      }
+
+      const pagination = res?.data?.pagination || res?.pagination;
+      if (pagination?.hasNext && pagination?.nextCursor !== null && pagination?.nextCursor !== undefined) {
+        cursor = pagination.nextCursor;
+        hasNext = true;
+      } else {
+        hasNext = false;
+      }
+      guard += 1;
+    }
+
+    return aggregated;
+  }, [selectedStore]);
+
+  const hydrateItems = useCallback(async (cats = []) => {
+    setItemsLoading(true);
+    try {
+      const items = await fetchAllItems();
+
+      const flattened = items.map(item => {
+        const categoryId = String(item.categoryId || '').trim();
+        const subcategoryId = String(item.subcategoryId || '').trim();
+
+        let categoryName = item.category?.name || 'Uncategorized';
+        let subcategoryName = item.subcategory?.name || null;
+
+        if (!categoryName || categoryName === 'Uncategorized') {
+          const matchedCat = cats.find(cat =>
+            String(cat.id || cat._id || '').trim() === categoryId
+          );
+          categoryName = matchedCat?.name || categoryName;
+
+          if (matchedCat && subcategoryId) {
+            const matchedSub = (matchedCat.subcategories || []).find(sub =>
+              String(sub.code || sub.id || '').trim() === subcategoryId
+            );
+            subcategoryName = matchedSub?.name || subcategoryName;
+          }
+        }
+
+        return {
+          _id: item.id || item._id || item.itemCode,
+          id: item.id || item._id || item.itemCode,
+          name: item.name || item.ProductName || 'Unnamed Item',
+          sku: item.sku || item.itemCode || item.ProductCode || '',
+          price: item.price || item.sellingPrice || item.SalePrice || 0,
+          cost: item.cost || item.costPrice || item.PurchaseOrderPrice || 0,
+          unit: item.unit || item.UnitOfMeasure || 'pcs',
+          category: categoryName,
+          subcategory: subcategoryName,
+          hsnCode: item.hsnCode || item.hsn_code || item.CommodityCode || '',
+          barcode: item.barcode || item.UniversalProductCode || '',
+          stock: item.stock ?? item.quantity ?? item.stockQuantity ?? null,
+          quantity: item.stock ?? item.quantity ?? item.stockQuantity ?? null,
+          mrp: item.mrp ?? item.MRP ?? item.maxRetailPrice ?? item.max_retail_price ?? 0,
+          gstRate: item.gstRate ?? item.gst_rate ?? item.taxRate ?? item.tax_rate ?? 0,
+          cessAmount: item.cessAmount ?? item.cess_amount ?? item.cess ?? 0,
+          batch: item.batch ?? item.batchNumber ?? item.batch_number ?? '',
+        };
+      });
+
+      setAllItems(flattened);
+    } catch (itemsError) {
+      console.error('Error loading items:', itemsError);
+      setAllItems([]);
+    } finally {
+      setItemsLoading(false);
+    }
+  }, [fetchAllItems]);
+
+  // Load items when store changes
+  useEffect(() => {
+    if (selectedStore?._id || selectedStore?.id) {
+      const loadItems = async () => {
+        let cats = [];
+        try {
+          const hierarchyRes = await categoriesAPI.getCategoryHierarchy();
+          cats = hierarchyRes?.data?.categories || hierarchyRes?.data || [];
+        } catch (e) {
+          console.error('Error loading category hierarchy, trying fallback:', e);
+          try {
+            const catsRes = await categoriesAPI.getCategories({ limit: 100 });
+            cats = catsRes?.data?.categories || catsRes?.data || [];
+          } catch (e2) {
+            console.error('Error loading categories:', e2);
+          }
+        }
+        await hydrateItems(Array.isArray(cats) ? cats : []);
+      };
+      loadItems();
+    }
+  }, [selectedStore, hydrateItems]);
+
+  // Client-side filtering for instant suggestions (like Purchase Orders)
+  const itemSearchResults = useMemo(() => {
+    if (!itemSearchTerm.trim()) {
+      return allItems.slice(0, 100); // Show first 100 items when no search term
+    }
+
+    const trimmedTerm = itemSearchTerm.trim();
+    const isLikelyBarcode = trimmedTerm.length >= 6 && /^[A-Za-z0-9\-]+$/.test(trimmedTerm);
+    const lower = trimmedTerm.toLowerCase();
+
+    const suggestions = allItems
+      .filter(i => {
+        const nameMatch = (i.name || '').toLowerCase().includes(lower);
+        const skuMatch = (i.sku || '').toLowerCase().includes(lower);
+        const barcodeMatch = (i.barcode || '').toLowerCase().includes(lower);
+        return nameMatch || skuMatch || barcodeMatch;
+      })
+      .sort((a, b) => {
+        // Sort exact SKU/barcode matches first for barcode scans
+        if (isLikelyBarcode) {
+          const aSkuExact = (a.sku || '').toUpperCase() === trimmedTerm.toUpperCase();
+          const aBarcodeExact = (a.barcode || '').toUpperCase() === trimmedTerm.toUpperCase();
+          const bSkuExact = (b.sku || '').toUpperCase() === trimmedTerm.toUpperCase();
+          const bBarcodeExact = (b.barcode || '').toUpperCase() === trimmedTerm.toUpperCase();
+          const aExact = aSkuExact || aBarcodeExact;
+          const bExact = bSkuExact || bBarcodeExact;
+          if (aExact && !bExact) return -1;
+          if (!aExact && bExact) return 1;
+        }
+        // Sort by name match quality (exact matches first, then starts with, then contains)
+        const aNameLower = (a.name || '').toLowerCase();
+        const bNameLower = (b.name || '').toLowerCase();
+        if (aNameLower.startsWith(lower) && !bNameLower.startsWith(lower)) return -1;
+        if (!aNameLower.startsWith(lower) && bNameLower.startsWith(lower)) return 1;
+        return 0;
+      })
+      .slice(0, 200); // Show up to 200 results (scrollable)
+
+    return suggestions.map((item) => normalizeItem(item));
+  }, [itemSearchTerm, allItems]);
+
+  const selectItemFromSearch = (item) => {
+    const normalized = normalizeItem(item);
+    
+    // Calculate GST amounts based on price, quantity (default 1), and GST rate
+    const quantity = 1;
+    const baseAmount = (normalized.price || 0) * quantity;
+    const gstRate = normalized.gstRate || 0;
+    const gstAmount = (baseAmount * gstRate) / 100;
+    const sgstAmount = gstAmount / 2;
+    const cgstAmount = gstAmount / 2;
+    
+    // Get CESS amount from item if available, otherwise 0
+    const cessAmount = Number(item.cessAmount ?? item.cess_amount ?? item.cess ?? 0) || 0;
+    
+    // Populate the new item row (don't add immediately - let user edit quantity first)
+    const itemRow = {
+      sku: normalized.sku || "",
+      name: normalized.name || "",
+      quantity: quantity,
+      batch: normalized.batch || "",
+      price: normalized.price || 0,
+      mrp: normalized.mrp || 0,
+      gstRate: normalized.gstRate || 0,
+      cessAmount: cessAmount,
+      sgstAmount: sgstAmount,
+      cgstAmount: cgstAmount,
+      gstAmount: gstAmount,
+      hsnCode: normalized.hsnCode || "",
+    };
+    
+    setNewItemRow(itemRow);
+    setItemSearchTerm("");
+    setShowSearchDropdown(false);
+    setSearchField(null);
+    
+    // Focus the Quantity field so user can edit it before adding
+    setTimeout(() => {
+      quantityInputRef.current?.focus();
+      quantityInputRef.current?.select();
+    }, 100);
+  };
 
   useEffect(() => {
     focusBarcodeInput();
   }, [activeBillId, focusBarcodeInput]);
+
+  // Update dropdown position when it's shown
+  useEffect(() => {
+    if (showSearchDropdown) {
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        updateDropdownPosition();
+      });
+    }
+  }, [showSearchDropdown, updateDropdownPosition]);
+
+  // Recalculate GST amounts when quantity or price changes in newItemRow
+  useEffect(() => {
+    if (newItemRow.name && newItemRow.gstRate !== undefined) {
+      const quantity = Number(newItemRow.quantity) || 1;
+      const price = Number(newItemRow.price) || 0;
+      const gstRate = Number(newItemRow.gstRate) || 0;
+      const baseAmount = price * quantity;
+      
+      const newGstAmount = (baseAmount * gstRate) / 100;
+      const newSgstAmount = newGstAmount / 2;
+      const newCgstAmount = newGstAmount / 2;
+      
+      // Only update if values have changed to avoid infinite loops
+      const currentGstAmount = Number(newItemRow.gstAmount) || 0;
+      if (Math.abs(newGstAmount - currentGstAmount) > 0.01) {
+        setNewItemRow(prev => ({
+          ...prev,
+          gstAmount: newGstAmount,
+          sgstAmount: newSgstAmount,
+          cgstAmount: newCgstAmount,
+        }));
+      }
+    }
+  }, [newItemRow.quantity, newItemRow.price, newItemRow.gstRate]);
+
+  // Update dropdown position on scroll/resize
+  useEffect(() => {
+    if (!showSearchDropdown) return;
+    const handleReposition = () => updateDropdownPosition();
+    window.addEventListener('scroll', handleReposition, true);
+    window.addEventListener('resize', handleReposition);
+    return () => {
+      window.removeEventListener('scroll', handleReposition, true);
+      window.removeEventListener('resize', handleReposition);
+    };
+  }, [showSearchDropdown, updateDropdownPosition]);
 
   // Load recent bills filtered by selected store
   useEffect(() => {
@@ -719,6 +1004,13 @@ export default function Billing() {
         price: item.price,
         mrp: item.mrp,
         quantity: 1,
+        hsnCode: item.hsnCode ?? "",
+        gstRate: item.gstRate ?? 0,
+        batch: item.batch ?? "",
+        cessAmount: 0,
+        sgstAmount: undefined, // Will be calculated
+        cgstAmount: undefined, // Will be calculated
+        gstAmount: undefined, // Will be calculated
       };
 
       return {
@@ -731,10 +1023,28 @@ export default function Billing() {
   };
 
   const updateItemQuantity = (billId, lineId, quantityValue) => {
-    const quantity = Math.max(Number.parseInt(quantityValue, 10) || 0, 0);
+    // Allow empty value temporarily (for editing), but default to 1 if empty
+    let quantity;
+    if (quantityValue === "" || quantityValue === null || quantityValue === undefined) {
+      quantity = ""; // Allow empty during editing - don't convert to 1 yet
+    } else {
+      const parsed = Number.parseInt(quantityValue, 10);
+      quantity = isNaN(parsed) ? "" : Math.max(1, parsed);
+    }
+    
     updateBill(billId, (bill) => ({
       items: bill.items.map((line) =>
-        line.lineId === lineId ? { ...line, quantity } : line
+        line.lineId === lineId ? { ...line, quantity: quantity } : line
+      ),
+      isSaved: false,
+      savedBillNo: null,
+    }));
+  };
+
+  const updateLineItemField = (billId, lineId, field, value) => {
+    updateBill(billId, (bill) => ({
+      items: bill.items.map((line) =>
+        line.lineId === lineId ? { ...line, [field]: value } : line
       ),
       isSaved: false,
       savedBillNo: null,
@@ -747,6 +1057,61 @@ export default function Billing() {
       isSaved: false,
       savedBillNo: null,
     }));
+  };
+
+  const addManualItem = (billId) => {
+    if (!newItemRow.name || !newItemRow.name.trim()) {
+      toast({
+        title: "Product name required",
+        description: "Please enter a product name to add the item.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    const newLine = {
+      lineId: `line-${createId()}`,
+      sourceId: newItemRow.sku || createId(),
+      name: newItemRow.name.trim(),
+      sku: newItemRow.sku || "",
+      price: Number(newItemRow.price) || 0,
+      mrp: Number(newItemRow.mrp) || 0,
+      quantity: Number(newItemRow.quantity) || 1,
+      hsnCode: newItemRow.hsnCode || "",
+      gstRate: Number(newItemRow.gstRate) || 0,
+      batch: newItemRow.batch || "",
+      cessAmount: Number(newItemRow.cessAmount) || 0,
+      sgstAmount: Number(newItemRow.sgstAmount) || 0,
+      cgstAmount: Number(newItemRow.cgstAmount) || 0,
+      gstAmount: Number(newItemRow.gstAmount) || 0,
+    };
+
+    updateBill(billId, (bill) => ({
+      items: [...bill.items, newLine],
+      isSaved: false,
+      savedBillNo: null,
+    }));
+
+    // Reset new item row
+    setNewItemRow({
+      sku: "",
+      name: "",
+      quantity: 1,
+      batch: "",
+      price: 0,
+      mrp: 0,
+      gstRate: 0,
+      cessAmount: 0,
+      sgstAmount: 0,
+      cgstAmount: 0,
+      gstAmount: 0,
+      hsnCode: "",
+    });
+
+    toast({
+      title: "Item added",
+      description: `${newLine.name} added to the bill`,
+    });
   };
 
   const clearBill = (billId) => {
@@ -967,11 +1332,14 @@ export default function Billing() {
               if (!local && Array.isArray(billToSave.items) && billToSave.items.length === printableBill.items.length) {
                 local = billToSave.items[idx];
               }
+              // Prioritize local MRP (from bill screen) over API MRP to ensure consistency
+              // The local MRP is what the user entered/saw in the bill screen
+              // Use local MRP if it exists (even if 0), only fall back to API MRP if local is missing
               const mrp =
-                Number.isFinite(Number(it.mrp))
-                  ? Number(it.mrp)
-                  : Number.isFinite(Number(local?.mrp))
-                    ? Number(local.mrp)
+                local?.mrp !== undefined && local?.mrp !== null && Number.isFinite(Number(local.mrp))
+                  ? Number(local.mrp)
+                  : Number.isFinite(Number(it.mrp))
+                    ? Number(it.mrp)
                     : 0;
               const sellingPrice =
                 Number.isFinite(Number(it.sellingPrice))
@@ -994,7 +1362,8 @@ export default function Billing() {
         const enhancedPrintableBill = {
           ...printableBill,
           totalSavings: totals.savings || 0,
-          items: enrichedItems
+          items: enrichedItems,
+          customerName: (printableBill?.customerName ?? printableBill?.customer_name ?? billToSave.customerName ?? '').toString().trim() || undefined
         };
         addBillToRecent(enhancedPrintableBill);
         setPrintModalState({ isOpen: true, bill: enhancedPrintableBill });
@@ -1109,6 +1478,27 @@ export default function Billing() {
     setScanError(null);
 
     try {
+      // First try to find in preloaded items (faster)
+      const foundItem = allItems.find(i => {
+        const skuMatch = (i.sku || '').toUpperCase() === value.toUpperCase();
+        const barcodeMatch = (i.barcode || '').toUpperCase() === value.toUpperCase();
+        return skuMatch || barcodeMatch;
+      });
+
+      if (foundItem) {
+        const normalizedItem = normalizeItem(foundItem);
+        addItemToBill(activeBillId, normalizedItem);
+        toast({
+          title: "Item added",
+          description: `${normalizedItem.name} added to the bill`
+        });
+        setBarcodeValue("");
+        setIsScanning(false);
+        focusBarcodeInput();
+        return;
+      }
+
+      // Fallback to API if not found in preloaded items
       const response = await itemsAPI.getItemByBarcode(value);
       const itemData =
         response?.data?.item ??
@@ -1149,11 +1539,48 @@ export default function Billing() {
   };
 
   const activeBill = bills.find((b) => b.id === activeBillId);
+  const billTotals = activeBill ? getBillTotals(activeBill) : { total: 0, subtotal: 0, discount: 0, tax: 0, savings: 0 };
 
   return (
     <div className="relative -m-6 bg-background flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 10rem)' }}>
       {/* Header Bar */}
       <div className="bg-primary text-primary-foreground flex flex-col border-b shadow-sm">
+        {/* Total Amount Display - Big and Prominent */}
+        <div className="px-6 py-4 bg-primary/90 border-b border-primary-foreground/20">
+          <div className="flex items-center justify-between">
+            <div className="flex items-baseline gap-3">
+              <span className="text-sm font-medium text-primary-foreground/80">Total Amount:</span>
+              <span className="text-4xl font-bold text-primary-foreground tracking-tight">
+                {toCurrency(billTotals.total)}
+              </span>
+            </div>
+            <div className="flex items-center gap-6 text-sm">
+              <div className="flex flex-col items-end">
+                <span className="text-primary-foreground/70">Subtotal</span>
+                <span className="font-semibold text-primary-foreground">{toCurrency(billTotals.subtotal)}</span>
+              </div>
+              {billTotals.savings > 0 && (
+                <div className="flex flex-col items-end">
+                  <span className="text-primary-foreground/70">Savings</span>
+                  <span className="font-semibold text-emerald-300">{toCurrency(billTotals.savings)}</span>
+                </div>
+              )}
+              {billTotals.discount > 0 && (
+                <div className="flex flex-col items-end">
+                  <span className="text-primary-foreground/70">Discount</span>
+                  <span className="font-semibold text-red-300">-{toCurrency(billTotals.discount)}</span>
+                </div>
+              )}
+              {billTotals.tax > 0 && (
+                <div className="flex flex-col items-end">
+                  <span className="text-primary-foreground/70">Tax</span>
+                  <span className="font-semibold text-primary-foreground">{toCurrency(billTotals.tax)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+        
         {/* Top Row - Title and Actions */}
         <div className="px-6 py-3 flex items-center justify-between">
           <div className="flex items-center gap-4">
@@ -1255,20 +1682,29 @@ export default function Billing() {
       <div className="flex-1 flex overflow-hidden">
         {/* Left Panel - Items Display */}
         <div className="flex-1 flex flex-col bg-muted/30 overflow-hidden">
-          {/* Search and Barcode Input */}
-          <div className="p-4 border-b bg-background space-y-3 shadow-sm">
+          {/* Barcode Input Only */}
+          <div className="p-4 border-b bg-background shadow-sm">
             <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
               <div className="relative flex-1">
                 <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
                 <Input
                   ref={barcodeInputRef}
-                  placeholder="Scan barcode..."
+                  placeholder="Scan barcode to add item..."
                   value={barcodeValue}
-                  onChange={(event) => setBarcodeValue(event.target.value)}
+                  onChange={(event) => {
+                    setBarcodeValue(event.target.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && barcodeValue.trim() && !isScanning) {
+                      event.preventDefault();
+                      handleBarcodeSubmit(event);
+                    }
+                  }}
                   disabled={isScanning}
                   className="pl-10 h-11 text-base"
                   autoComplete="off"
                   inputMode="numeric"
+                  autoFocus
                 />
               </div>
               <Button 
@@ -1290,160 +1726,675 @@ export default function Billing() {
               </Button>
             </form>
 
-            {/* Product Search */}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground z-10" />
-              <Input
-                placeholder="Type product name to search..."
-                className="pl-10 h-11 text-base"
-                value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
-              />
-              
-              {/* Search Results Dropdown */}
-              {searchTerm && searchResults.length > 0 && !isSearching && (
-                <div className="absolute z-50 mt-2 w-full bg-background border rounded-lg shadow-lg max-h-60 overflow-y-auto">
-                  {searchResults.slice(0, 10).map((item) => (
-                    <div
-                      key={item.sourceId}
-                      className="p-3 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
-                      onClick={() => {
-                        addItemToBill(activeBillId, item);
-                        setSearchTerm("");
-                      }}
-                    >
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <p className="font-medium">{item.name}</p>
-                          {item.sku && (
-                            <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
-                          )}
-                        </div>
-                        <span className="font-semibold text-primary">{toCurrency(item.price)}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              {searchTerm && isSearching && (
-                <div className="absolute z-50 mt-2 w-full bg-background border rounded-lg shadow-lg p-4">
-                  <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span className="text-sm">Searching...</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
             {scanError && (
-              <div className="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+              <div className="mt-2 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
                 {scanError}
               </div>
             )}
           </div>
 
-          {/* Items Display Area - Row Format */}
-          <div className="flex-1 overflow-y-auto bg-background">
-            {activeBill?.items.length === 0 ? (
-              <div className="h-full flex flex-col items-center justify-center text-center space-y-4 text-muted-foreground p-8">
-                <ScanBarcode className="h-16 w-16 opacity-20" />
-                <div>
-                  <p className="text-lg font-medium">No items added yet</p>
-                  <p className="text-sm mt-1">Scan barcode or search for products to add items</p>
+          {/* Items Display Area - Detailed Table Format */}
+          <div className="flex-1 bg-background" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+            <div className="flex-1 overflow-y-auto" style={{ position: 'relative' }}>
+              <div className="p-4" style={{ position: 'relative', overflow: 'visible' }}>
+                {/* Table Container with Horizontal Scroll */}
+                <div className="overflow-x-auto" style={{ position: 'relative' }}>
+                  <table className="w-full border-collapse" style={{ position: 'relative', tableLayout: 'auto' }}>
+                    {/* Header Row */}
+                    <thead className="bg-muted/50 sticky top-0 z-10">
+                      <tr className="border-b">
+                        <th className="p-2 text-center text-xs font-semibold text-muted-foreground min-w-[50px] whitespace-nowrap align-top">S.No.</th>
+                        <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">P Code</th>
+                        <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[200px] whitespace-nowrap align-top">Product Name</th>
+                        <th className="p-2 text-center text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">Quantity</th>
+                        <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">Batch</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">Rate</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">MRP</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">CESSAmt</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">SGST</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">CGST</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">GST</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">Base Amount</th>
+                        <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">HSN Code</th>
+                        <th className="p-2 text-center text-xs font-semibold text-muted-foreground min-w-[60px] whitespace-nowrap align-top">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeBill?.items.map((line, index) => {
+                        const baseAmount = line.price * line.quantity;
+                        const gstRate = line.gstRate ?? 0;
+                        // Use manual values if set, otherwise calculate
+                        const gstAmount = line.gstAmount !== undefined ? line.gstAmount : (baseAmount * gstRate) / 100;
+                        const sgstAmount = line.sgstAmount !== undefined ? line.sgstAmount : gstAmount / 2;
+                        const cgstAmount = line.cgstAmount !== undefined ? line.cgstAmount : gstAmount / 2;
+                        const cessAmount = line.cessAmount !== undefined ? line.cessAmount : 0;
+                        
+                        return (
+                          <tr
+                            key={line.lineId}
+                            className="border-b hover:bg-muted/30 transition-colors"
+                          >
+                            {/* Serial Number */}
+                            <td className="p-2 text-center">
+                              <span className="text-sm font-medium text-muted-foreground">
+                                {index + 1}
+                              </span>
+                            </td>
+                            
+                            {/* P Code */}
+                            <td className="p-2 text-left">
+                              <span className="text-sm text-muted-foreground">
+                                {line.sku || "—"}
+                              </span>
+                            </td>
+                            
+                            {/* Product Name */}
+                            <td className="p-2 text-left">
+                              <span className="text-sm font-medium">
+                                {line.name || "—"}
+                              </span>
+                            </td>
+                            
+                            {/* Quantity */}
+                            <td className="p-2 text-center">
+                              <Input
+                                type="number"
+                                min="1"
+                                step="1"
+                                value={line.quantity === "" || line.quantity === null || line.quantity === undefined ? "" : line.quantity}
+                                onChange={(event) => {
+                                  const value = event.target.value;
+                                  // Allow empty value during editing - user can clear with backspace
+                                  if (value === "") {
+                                    updateItemQuantity(activeBillId, line.lineId, "");
+                                    return;
+                                  }
+                                  const quantity = Number(value);
+                                  if (!isNaN(quantity) && quantity >= 1) {
+                                    updateItemQuantity(activeBillId, line.lineId, quantity);
+                                  }
+                                }}
+                                onBlur={(event) => {
+                                  const value = event.target.value;
+                                  // Ensure minimum of 1 when field loses focus
+                                  const quantity = Math.max(1, Number(value) || 1);
+                                  updateItemQuantity(activeBillId, line.lineId, quantity);
+                                }}
+                                className="w-20 h-8 text-center mx-auto"
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    const value = event.target.value;
+                                    const quantity = Math.max(1, Number(value) || 1);
+                                    updateItemQuantity(activeBillId, line.lineId, quantity);
+                                    event.currentTarget.blur();
+                                  }
+                                }}
+                              />
+                            </td>
+                            
+                            {/* Batch */}
+                            <td className="p-2 text-left">
+                              <span className="text-sm text-muted-foreground">
+                                {line.batch || "—"}
+                              </span>
+                            </td>
+                            
+                            {/* Rate */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm font-semibold">
+                                ₹{Number(line.price || 0).toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* MRP */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm line-through text-muted-foreground">
+                                ₹{Number(line.mrp || 0).toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* CESSAmt */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm">
+                                ₹{cessAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* SGST */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm">
+                                ₹{sgstAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* CGST */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm">
+                                ₹{cgstAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* GST */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm">
+                                ₹{gstAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* Base Amount */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm font-bold text-primary">
+                                ₹{baseAmount.toFixed(2)}
+                              </span>
+                            </td>
+                            
+                            {/* HSN Code */}
+                            <td className="p-2 text-left">
+                              <span className="text-sm text-muted-foreground">
+                                {line.hsnCode || "—"}
+                              </span>
+                            </td>
+                            
+                            {/* Action */}
+                            <td className="p-2 text-center">
+                              <div className="flex justify-center">
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
+                                  onClick={() => removeItemFromBill(activeBillId, line.lineId)}
+                                >
+                                  <X className="h-4 w-4" />
+                                </Button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      
+                      {/* Empty Row for Manual Entry - Always visible */}
+                      <tr className="border-b-2 border-dashed bg-muted/20">
+                        {/* Serial Number */}
+                        <td className="p-2 text-center">
+                          <span className="text-sm font-medium text-muted-foreground">
+                            {(activeBill?.items.length || 0) + 1}
+                          </span>
+                        </td>
+                        
+                        {/* P Code */}
+                        <td className="p-2 text-left" style={{ position: 'relative', zIndex: showSearchDropdown && searchField === 'sku' ? 1000 : 'auto' }}>
+                          <div className="relative">
+                            <Input
+                              ref={skuInputRef}
+                              type="text"
+                              value={newItemRow.sku}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setNewItemRow({ ...newItemRow, sku: value });
+                                setItemSearchTerm(value);
+                                setSearchField('sku');
+                                updateDropdownPosition();
+                                setShowSearchDropdown(true);
+                              }}
+                              onFocus={() => {
+                                setSearchField('sku');
+                                if (newItemRow.sku) {
+                                  setItemSearchTerm(newItemRow.sku);
+                                } else {
+                                  setItemSearchTerm("");
+                                }
+                                updateDropdownPosition();
+                                setShowSearchDropdown(true);
+                              }}
+                              onBlur={() => {
+                                setTimeout(() => setShowSearchDropdown(false), 200);
+                              }}
+                              placeholder="Enter P Code"
+                              className="h-8 text-sm text-left"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  if (itemSearchResults.length > 0 && showSearchDropdown) {
+                                    event.preventDefault();
+                                    selectItemFromSearch(itemSearchResults[0]);
+                                  } else if (newItemRow.sku.trim()) {
+                                    event.preventDefault();
+                                    addManualItem(activeBillId);
+                                  }
+                                } else if (event.key === "Escape") {
+                                  setShowSearchDropdown(false);
+                                }
+                              }}
+                            />
+                            {showSearchDropdown && searchField === 'sku' && (
+                              <div 
+                                className="fixed bg-background border rounded-lg shadow-xl"
+                                style={{ 
+                                  zIndex: 99999,
+                                  top: `${dropdownPosition.top}px`,
+                                  left: `${dropdownPosition.left}px`,
+                                  width: `${dropdownPosition.width}px`,
+                                  maxWidth: '500px',
+                                  maxHeight: `${dropdownPosition.maxHeight || 500}px`,
+                                  overflowY: 'auto',
+                                  overflowX: 'hidden',
+                                  display: 'block'
+                                }}
+                              >
+                                {itemsLoading ? (
+                                  <div className="bg-background border rounded-lg shadow-xl p-2">
+                                    <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                      <span className="text-sm">Loading items...</span>
+                                    </div>
+                                  </div>
+                                ) : itemSearchResults.length > 0 ? (
+                                  <div style={{ maxHeight: `${(dropdownPosition.maxHeight || 500) - 20}px`, overflowY: 'auto' }}>
+                                    {itemSearchResults.map((item) => (
+                                      <div
+                                        key={item.sourceId}
+                                        className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          selectItemFromSearch(item);
+                                        }}
+                                      >
+                                        <div className="flex justify-between items-center">
+                                          <div className="flex-1 min-w-0">
+                                            <p className="font-medium text-sm truncate">{item.name}</p>
+                                            <div className="flex items-center gap-2 mt-1">
+                                              {item.sku && (
+                                                <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
+                                              )}
+                                              {item.hsnCode && (
+                                                <p className="text-xs text-muted-foreground">HSN: {item.hsnCode}</p>
+                                              )}
+                                            </div>
+                                          </div>
+                                          <span className="font-semibold text-primary ml-2 text-sm">{toCurrency(item.price)}</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : itemSearchTerm.trim().length > 0 ? (
+                                  <div className="bg-background border rounded-lg shadow-xl p-2">
+                                    <div className="text-center text-sm text-muted-foreground">
+                                      No items found
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        
+                        {/* Product Name */}
+                        <td className="p-2 text-left" style={{ position: 'relative' }}>
+                          <div className="relative w-full">
+                            <Input
+                              ref={nameInputRef}
+                              type="text"
+                              value={newItemRow.name}
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                setNewItemRow({ ...newItemRow, name: value });
+                                setItemSearchTerm(value);
+                                setSearchField('name');
+                                updateDropdownPosition();
+                                setShowSearchDropdown(true);
+                              }}
+                              onFocus={() => {
+                                setSearchField('name');
+                                if (newItemRow.name && newItemRow.name.length > 0) {
+                                  setItemSearchTerm(newItemRow.name);
+                                } else {
+                                  setItemSearchTerm("");
+                                }
+                                updateDropdownPosition();
+                                setShowSearchDropdown(true);
+                              }}
+                              onBlur={(e) => {
+                                // Delay hiding to allow click on dropdown items
+                                const relatedTarget = e.relatedTarget;
+                                setTimeout(() => {
+                                  // Check if focus moved to dropdown or if clicking on dropdown
+                                  const activeElement = document.activeElement;
+                                  if (!activeElement || 
+                                      (!activeElement.closest('.search-dropdown') && 
+                                       !relatedTarget?.closest('.search-dropdown'))) {
+                                    setShowSearchDropdown(false);
+                                  }
+                                }, 300);
+                              }}
+                              placeholder="Type product name to search..."
+                              className="h-8 text-sm font-medium w-full text-left"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  if (itemSearchResults.length > 0 && showSearchDropdown) {
+                                    event.preventDefault();
+                                    selectItemFromSearch(itemSearchResults[0]);
+                                  } else if (newItemRow.name.trim()) {
+                                    event.preventDefault();
+                                    addManualItem(activeBillId);
+                                  }
+                                } else if (event.key === "Escape") {
+                                  setShowSearchDropdown(false);
+                                }
+                              }}
+                            />
+                            {showSearchDropdown && searchField === 'name' && (
+                              <div 
+                                className="search-dropdown fixed bg-background border-2 border-primary/20 rounded-lg shadow-2xl"
+                                style={{ 
+                                  zIndex: 99999,
+                                  top: `${dropdownPosition.top}px`,
+                                  left: `${dropdownPosition.left}px`,
+                                  width: `${dropdownPosition.width}px`,
+                                  maxWidth: '500px',
+                                  maxHeight: `${dropdownPosition.maxHeight || 500}px`,
+                                  overflowY: 'auto',
+                                  overflowX: 'hidden',
+                                  position: 'fixed',
+                                  display: 'block'
+                                }}
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                }}
+                              >
+                                {itemsLoading ? (
+                                  <div className="p-4">
+                                    <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                      <span className="text-sm">Loading items...</span>
+                                    </div>
+                                  </div>
+                                ) : itemSearchResults.length > 0 ? (
+                                  <div className="overflow-y-auto" style={{ maxHeight: `${(dropdownPosition.maxHeight || 500) - 40}px` }}>
+                                    <div className="p-2 bg-muted/50 border-b text-xs font-semibold text-muted-foreground sticky top-0 bg-background z-10">
+                                      Select an item ({itemSearchResults.length} found)
+                                    </div>
+                                    <div>
+                                      {itemSearchResults.map((item, idx) => (
+                                        <div
+                                          key={item.sourceId}
+                                          className="p-3 hover:bg-primary/10 cursor-pointer border-b last:border-b-0 transition-colors active:bg-primary/20"
+                                          onClick={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            selectItemFromSearch(item);
+                                          }}
+                                          onMouseDown={(e) => {
+                                            e.preventDefault();
+                                            e.stopPropagation();
+                                            selectItemFromSearch(item);
+                                          }}
+                                          style={{ cursor: 'pointer' }}
+                                        >
+                                          <div className="flex justify-between items-start gap-2">
+                                            <div className="flex-1 min-w-0">
+                                              <p className="font-semibold text-sm text-foreground">{item.name}</p>
+                                              <div className="flex items-center gap-3 mt-1.5">
+                                                {item.sku && (
+                                                  <p className="text-xs text-muted-foreground font-medium">Code: {item.sku}</p>
+                                                )}
+                                                {item.hsnCode && (
+                                                  <p className="text-xs text-muted-foreground">HSN: {item.hsnCode}</p>
+                                                )}
+                                              </div>
+                                            </div>
+                                            <span className="font-bold text-primary text-base whitespace-nowrap ml-2">{toCurrency(item.price)}</span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  </div>
+                                ) : itemSearchTerm.trim().length > 0 && !itemsLoading ? (
+                                  <div className="p-4">
+                                    <div className="text-center text-sm text-muted-foreground">
+                                      <p>No items found for "{itemSearchTerm}"</p>
+                                      <p className="text-xs mt-1">Try a different search term</p>
+                                    </div>
+                                  </div>
+                                ) : null}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        
+                        {/* Quantity */}
+                        <td className="p-2 text-center">
+                          <Input
+                            ref={quantityInputRef}
+                            type="number"
+                            min="1"
+                            step="1"
+                            value={newItemRow.quantity === "" || newItemRow.quantity === null || newItemRow.quantity === undefined ? "" : newItemRow.quantity}
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              // Allow empty value during editing - user can clear with backspace
+                              if (value === "") {
+                                setNewItemRow({ ...newItemRow, quantity: "" });
+                                return;
+                              }
+                              const numValue = Number(value);
+                              if (!isNaN(numValue) && numValue >= 1) {
+                                setNewItemRow({ ...newItemRow, quantity: numValue });
+                              }
+                            }}
+                            onBlur={(event) => {
+                              const value = event.target.value;
+                              // Ensure minimum of 1 when field loses focus
+                              const quantity = Math.max(1, Number(value) || 1);
+                              setNewItemRow({ ...newItemRow, quantity });
+                            }}
+                            className="w-20 h-8 text-center mx-auto"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                const quantity = Math.max(1, Number(newItemRow.quantity) || 1);
+                                if (newItemRow.name && newItemRow.name.trim()) {
+                                  setNewItemRow({ ...newItemRow, quantity });
+                                  addManualItem(activeBillId);
+                                  // After adding, focus back to product name for next item
+                                  setTimeout(() => {
+                                    nameInputRef.current?.focus();
+                                  }, 100);
+                                }
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* Batch */}
+                        <td className="p-2 text-left">
+                          <Input
+                            type="text"
+                            value={newItemRow.batch}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, batch: event.target.value })
+                            }
+                            placeholder="—"
+                            className="h-8 text-sm text-left"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* Rate */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.price}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, price: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right font-semibold w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* MRP */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.mrp}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, mrp: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right line-through text-muted-foreground w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* CESSAmt */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.cessAmount}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, cessAmount: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* SGST */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.sgstAmount}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, sgstAmount: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* CGST */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.cgstAmount}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, cgstAmount: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* GST */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.gstAmount}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, gstAmount: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0.00"
+                            className="h-8 text-sm text-right w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* Base Amount */}
+                        <td className="p-2 text-right align-top">
+                          <span className="text-sm font-bold text-primary block">
+                            ₹{((newItemRow.price || 0) * (newItemRow.quantity || 1)).toFixed(2)}
+                          </span>
+                        </td>
+                        
+                        {/* HSN Code */}
+                        <td className="p-2 text-left">
+                          <Input
+                            type="text"
+                            value={newItemRow.hsnCode}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, hsnCode: event.target.value })
+                            }
+                            placeholder="—"
+                            className="h-8 text-sm text-left"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
+                        
+                        {/* Action */}
+                        <td className="p-2 text-center">
+                          <div className="flex justify-center">
+                            <Button
+                              variant="default"
+                              size="sm"
+                              onClick={() => addManualItem(activeBillId)}
+                              className="h-8 px-3"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
-            ) : (
-              <div className="p-4">
-                {/* Header Row */}
-                <div className="grid grid-cols-12 gap-4 pb-3 mb-2 border-b font-semibold text-sm text-muted-foreground sticky top-0 bg-background z-10 py-2">
-                  <div className="col-span-1 text-center">S.No.</div>
-                  <div className="col-span-3">Product Name</div>
-                  <div className="col-span-2 text-right">MRP</div>
-                  <div className="col-span-2 text-right">Price</div>
-                  <div className="col-span-2 text-center">Quantity</div>
-                  <div className="col-span-1 text-right">Total</div>
-                  <div className="col-span-1 text-center">Action</div>
-                </div>
-                
-                {/* Item Rows */}
-                <div className="space-y-2">
-                  {activeBill?.items.map((line, index) => (
-                    <div
-                      key={line.lineId}
-                      className="grid grid-cols-12 gap-4 items-center py-2.5 px-3 rounded-lg border bg-card hover:bg-muted/50 transition-colors"
-                    >
-                      {/* Serial Number */}
-                      <div className="col-span-1 text-center">
-                        <span className="text-sm font-medium text-muted-foreground">
-                          {index + 1}
-                        </span>
-                      </div>
-                      
-                      {/* Product Name */}
-                      <div className="col-span-3 flex items-center">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium text-sm truncate">{line.name}</p>
-                          {line.sku && (
-                            <p className="text-xs text-muted-foreground">SKU: {line.sku}</p>
-                          )}
-                        </div>
-                      </div>
-                      
-                      {/* MRP */}
-                      <div className="col-span-2 text-right">
-                        <span className="line-through text-muted-foreground text-sm">
-                          ₹{Number(line.mrp ?? 0).toFixed(2)}
-                        </span>
-                      </div>
-                      
-                      {/* Price */}
-                      <div className="col-span-2 text-right">
-                        <span className="font-semibold text-sm">
-                          ₹{line.price.toFixed(2)}
-                        </span>
-                      </div>
-                      
-                      {/* Quantity */}
-                      <div className="col-span-2 flex justify-center">
-                        <Input
-                          type="number"
-                          min="0"
-                          value={line.quantity}
-                          onChange={(event) =>
-                            updateItemQuantity(
-                              activeBillId,
-                              line.lineId,
-                              event.target.value
-                            )
-                          }
-                          className="w-20 h-9 text-center"
-                        />
-                      </div>
-                      
-                      {/* Total */}
-                      <div className="col-span-1 text-right">
-                        <span className="font-bold text-primary text-sm">
-                          ₹{(line.price * line.quantity).toFixed(2)}
-                        </span>
-                      </div>
-                      
-                      {/* Remove Button */}
-                      <div className="col-span-1 flex justify-center">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => removeItemFromBill(activeBillId, line.lineId)}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            </div>
           </div>
         </div>
 
@@ -1458,37 +2409,15 @@ export default function Billing() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Discount</label>
-                  <Input
-                    placeholder="0.00"
-                    value={activeBill?.discount || "0"}
-                    onChange={(event) =>
-                      updateBill(activeBillId, {
-                        discount: ensureNumberInput(
-                          event.target.value,
-                          activeBill?.discount || "0"
-                        ),
-                        isSaved: false,
-                        savedBillNo: null,
-                      })
-                    }
-                  />
+                  <div className="p-2 bg-muted rounded-md">
+                    <span className="text-sm">{toCurrency(activeBill?.discount || 0)}</span>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Tax</label>
-                  <Input
-                    placeholder="0.00"
-                    value={activeBill?.tax || "0"}
-                    onChange={(event) =>
-                      updateBill(activeBillId, {
-                        tax: ensureNumberInput(
-                          event.target.value,
-                          activeBill?.tax || "0"
-                        ),
-                        isSaved: false,
-                        savedBillNo: null,
-                      })
-                    }
-                  />
+                  <div className="p-2 bg-muted rounded-md">
+                    <span className="text-sm">{toCurrency(activeBill?.tax || 0)}</span>
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1512,56 +2441,21 @@ export default function Billing() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Select Payment Mode</label>
-                  <Select
-                    value={activeBill?.paymentMethod || "upi"}
-                    onValueChange={(value) =>
-                      updateBill(activeBillId, {
-                        paymentMethod: value,
-                        paymentStatus: value === "credit" ? "pending" : "paid",
-                        transactionId: value !== "online" ? "" : activeBill?.transactionId,
-                        isSaved: false,
-                        savedBillNo: null,
-                      })
-                    }
-                  >
-                    <SelectTrigger className="h-12">
-                      <SelectValue placeholder="Select payment method" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {PAYMENT_METHODS.map((method) => (
-                        <SelectItem
-                          key={method.value}
-                          value={method.value}
-                        >
-                          {method.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <label className="text-sm font-medium">Payment Method</label>
+                  <div className="p-2 bg-muted rounded-md">
+                    <span className="text-sm capitalize">
+                      {PAYMENT_METHODS.find(m => m.value === activeBill?.paymentMethod)?.label || activeBill?.paymentMethod || "—"}
+                    </span>
+                  </div>
                 </div>
                 
-                {activeBill?.paymentMethod === "online" && (
+                {activeBill?.paymentMethod === "online" && activeBill?.transactionId && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Transaction ID</label>
-                    <Input
-                      placeholder="Enter transaction ID"
-                      value={activeBill?.transactionId || ""}
-                      onChange={(event) =>
-                        updateBill(activeBillId, {
-                          transactionId: event.target.value,
-                          isSaved: false,
-                          savedBillNo: null,
-                        })
-                      }
-                    />
+                    <div className="p-2 bg-muted rounded-md">
+                      <span className="text-sm">{activeBill.transactionId}</span>
+                    </div>
                   </div>
-                )}
-
-                {activeBill?.paymentMethod === "credit" && (
-                  <p className="text-xs text-muted-foreground">
-                    Customer name and phone are required for credit bills.
-                  </p>
                 )}
               </CardContent>
             </Card>
@@ -1574,56 +2468,14 @@ export default function Billing() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Customer Name</label>
-                  <Input
-                    placeholder="Enter customer name"
-                    value={activeBill?.customerName || ""}
-                    onChange={(event) =>
-                      updateBill(activeBillId, {
-                        customerName: event.target.value,
-                        isSaved: false,
-                        savedBillNo: null,
-                      })
-                    }
-                  />
+                  <div className="p-2 bg-muted rounded-md">
+                    <span className="text-sm">{activeBill?.customerName || "—"}</span>
+                  </div>
                 </div>
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Customer Phone</label>
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Enter phone"
-                      value={activeBill?.customerPhone || ""}
-                      onChange={(event) =>
-                        updateBill(activeBillId, {
-                          customerPhone: event.target.value,
-                          isSaved: false,
-                          savedBillNo: null,
-                        })
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault();
-                          prefillCustomerByPhone(activeBillId, event.currentTarget.value);
-                        }
-                      }}
-                      inputMode="tel"
-                      className="flex-1"
-                    />
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => prefillCustomerByPhone(activeBillId, activeBill?.customerPhone)}
-                      disabled={
-                        activeBill?.isCustomerLookupLoading ||
-                        !activeBill?.customerPhone ||
-                        !activeBill?.customerPhone.trim()
-                      }
-                    >
-                      {activeBill?.isCustomerLookupLoading ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        "Fetch"
-                      )}
-                    </Button>
+                  <div className="p-2 bg-muted rounded-md">
+                    <span className="text-sm">{activeBill?.customerPhone || "—"}</span>
                   </div>
                 </div>
               </CardContent>
@@ -1757,5 +2609,3 @@ export default function Billing() {
     </div>
   );
 }
-
-

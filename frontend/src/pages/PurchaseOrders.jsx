@@ -75,6 +75,8 @@ const PurchaseOrders = () => {
     placement: "bottom"
   });
   const inputRefs = useRef({});
+  const lastBarcodeScanRef = useRef({ barcode: '', time: 0 });
+  const SCAN_DEBOUNCE_MS = 1800;
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
   const [barcodeData, setBarcodeData] = useState(null);
   const [currentPOId, setCurrentPOId] = useState(null);
@@ -513,6 +515,14 @@ const PurchaseOrders = () => {
       });
 
       if (exactMatch) {
+        const now = Date.now();
+        if (
+          lastBarcodeScanRef.current.barcode === trimmedTerm &&
+          now - lastBarcodeScanRef.current.time < SCAN_DEBOUNCE_MS
+        ) {
+          return;
+        }
+        lastBarcodeScanRef.current = { barcode: trimmedTerm, time: now };
         // Found exact SKU or barcode match - auto-select it in the target row
         setItemSuggestions(prev => ({ ...prev, [targetIndex]: [exactMatch] }));
         setOpenSuggestIndex(targetIndex);
@@ -579,12 +589,20 @@ const PurchaseOrders = () => {
     setOpenSuggestIndex(null);
   };
 
-  // Barcode scanner handler
+  // Barcode scanner handler (with duplicate-scan prevention)
   const handleBarcodeScan = async (barcode) => {
     const trimmedBarcode = barcode.trim();
     if (!trimmedBarcode || trimmedBarcode.length < 2) {
       return;
     }
+    const now = Date.now();
+    if (
+      lastBarcodeScanRef.current.barcode === trimmedBarcode &&
+      now - lastBarcodeScanRef.current.time < SCAN_DEBOUNCE_MS
+    ) {
+      return;
+    }
+    lastBarcodeScanRef.current = { barcode: trimmedBarcode, time: now };
 
     const isLikelyBarcode = trimmedBarcode.length >= 6 && /^[A-Za-z0-9\-]+$/.test(trimmedBarcode);
 
@@ -1864,8 +1882,9 @@ const PurchaseOrders = () => {
                   onKeyDown={async (e) => {
                     if (e.key === 'Enter' && barcodeScannerValue.trim()) {
                       e.preventDefault();
-                      await handleBarcodeScan(barcodeScannerValue);
+                      const value = barcodeScannerValue;
                       setBarcodeScannerValue('');
+                      await handleBarcodeScan(value);
                     }
                   }}
                   className="w-64"
@@ -2002,8 +2021,20 @@ const PurchaseOrders = () => {
                                   }
                                 }
 
+                                // Duplicate-scan prevention for row barcode Enter
+                                const now = Date.now();
+                                if (
+                                  lastBarcodeScanRef.current.barcode === trimmedParticulars &&
+                                  now - lastBarcodeScanRef.current.time < SCAN_DEBOUNCE_MS
+                                ) {
+                                  return;
+                                }
+
                                 // If there's exactly one suggestion, auto-select it
                                 if (itemSuggestions[targetIndex]?.length === 1) {
+                                  if (isLikelyBarcode) {
+                                    lastBarcodeScanRef.current = { barcode: trimmedParticulars, time: now };
+                                  }
                                   chooseSuggestion(targetIndex, itemSuggestions[targetIndex][0]);
                                   return;
                                 }
@@ -2015,6 +2046,7 @@ const PurchaseOrders = () => {
                                   );
 
                                   if (exactSkuMatch) {
+                                    lastBarcodeScanRef.current = { barcode: trimmedParticulars, time: now };
                                     chooseSuggestion(targetIndex, exactSkuMatch);
                                     return;
                                   }

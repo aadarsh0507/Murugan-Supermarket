@@ -356,6 +356,12 @@ const TABLE_MATCH_KEY_FALLBACK = {
 };
 
 /**
+ * Tables that must always be compared with global (not watermark). Ensures every sync pushes new/changed rows
+ * even if updated_at is missing or watermark would skip them. Use for critical tables like bills.
+ */
+const ALWAYS_COMPARE_TABLES = new Set(['bills', 'bill_items']);
+
+/**
  * Get the preferred match key for a table: use UNIQUE key(s) so client and global match by same business key.
  * Returns { whereColumns } - columns to use in WHERE when matching a row (e.g. ['product_code','store_id'] or ['id']).
  * Prefers a non-PRIMARY UNIQUE key so both DBs are compared and updated by the same unique codes.
