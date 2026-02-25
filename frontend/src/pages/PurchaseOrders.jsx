@@ -30,7 +30,28 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { CalendarIcon } from "lucide-react";
-import { format } from "date-fns";
+import { format, parseISO, isValid } from "date-fns";
+
+// Safely format yyyy-MM-dd for display as dd-MM-yyyy; return fallback if invalid
+function formatDateDisplay(isoStr, fallback = "Select date") {
+  if (!isoStr || typeof isoStr !== "string") return fallback;
+  try {
+    const d = parseISO(isoStr.trim());
+    return isValid(d) ? format(d, "dd-MM-yyyy") : fallback;
+  } catch {
+    return fallback;
+  }
+}
+// Safely parse to Date for Calendar selected prop; return undefined if invalid
+function parseDateSafe(isoStr) {
+  if (!isoStr || typeof isoStr !== "string") return undefined;
+  try {
+    const d = parseISO(isoStr.trim());
+    return isValid(d) ? d : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 const EMPTY_ITEM_TEMPLATE = {
   particulars: "",
@@ -82,6 +103,7 @@ const PurchaseOrders = () => {
   const [currentPOId, setCurrentPOId] = useState(null);
   const [highlightedRowIndex, setHighlightedRowIndex] = useState(null);
   const [barcodeScannerValue, setBarcodeScannerValue] = useState('');
+  const [openExpiryDateRowIndex, setOpenExpiryDateRowIndex] = useState(null);
 
   const [formData, setFormData] = useState({
     supplier: "",
@@ -442,7 +464,6 @@ const PurchaseOrders = () => {
       items[index].total = subtotalAfterDiscount + totalTaxAmount;
     }
 
-    setFormData({ ...formData, items });
     calculateTotals(items);
   };
 
@@ -730,6 +751,7 @@ const PurchaseOrders = () => {
 
     setFormData(prev => ({
       ...prev,
+      items,
       totalItems,
       totalQty,
       price,
@@ -1736,11 +1758,31 @@ const PurchaseOrders = () => {
               </div>
               <div>
                 <Label>Purchase Order Date</Label>
-                <Input
-                  type="date"
-                  value={formData.quotationDate}
-                  onChange={(e) => setFormData({ ...formData, quotationDate: e.target.value })}
-                />
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={`w-full justify-start text-left font-normal h-10 ${!formData.quotationDate ? "text-muted-foreground" : ""}`}
+                    >
+                      <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
+                      <span>{formatDateDisplay(formData.quotationDate)}</span>
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar
+                      mode="single"
+                      selected={parseDateSafe(formData.quotationDate)}
+                      defaultMonth={parseDateSafe(formData.quotationDate) || undefined}
+                      onSelect={(date) => {
+                        setFormData((prev) => ({
+                          ...prev,
+                          quotationDate: date ? format(date, "yyyy-MM-dd") : "",
+                        }));
+                      }}
+                      initialFocus
+                    />
+                  </PopoverContent>
+                </Popover>
               </div>
             </div>
           </CardContent>
@@ -2140,27 +2182,31 @@ const PurchaseOrders = () => {
                         />
                       </TableCell>
                       <TableCell className="relative">
-                        <Popover>
+                        <Popover
+                          open={openExpiryDateRowIndex === index}
+                          onOpenChange={(open) => setOpenExpiryDateRowIndex(open ? index : null)}
+                        >
                           <PopoverTrigger asChild>
                             <Button
                               variant="outline"
-                              className={`w-full max-w-24 justify-start text-left font-normal items-center h-9 px-2 ${!item.expiryDate ? "text-muted-foreground" : ""
-                                }`}
+                              className={`w-full max-w-[8.5rem] justify-start text-left font-normal h-9 px-2 ${!item.expiryDate ? "text-muted-foreground" : ""}`}
                             >
-                              <CalendarIcon className={`mr-2 h-4 w-4 flex-shrink-0 ${!item.expiryDate ? "opacity-50" : ""}`} />
-                              <span className="truncate">{item.expiryDate ? format(new Date(item.expiryDate), "dd-MM-yyyy") : "Select date"}</span>
+                              <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0 opacity-70" />
+                              <span className="truncate">{formatDateDisplay(item.expiryDate)}</span>
                             </Button>
                           </PopoverTrigger>
-                          <PopoverContent className="w-[300px] p-0 max-h-none" align="start" sideOffset={4} collisionPadding={10}>
+                          <PopoverContent className="w-auto p-0" align="start" sideOffset={4}>
                             <Calendar
                               mode="single"
-                              selected={item.expiryDate ? new Date(item.expiryDate) : undefined}
+                              selected={parseDateSafe(item.expiryDate)}
+                              defaultMonth={parseDateSafe(item.expiryDate) || undefined}
                               onSelect={(date) => {
                                 if (date) {
                                   updateItem(index, 'expiryDate', format(date, "yyyy-MM-dd"));
                                 } else {
                                   updateItem(index, 'expiryDate', '');
                                 }
+                                setOpenExpiryDateRowIndex(null);
                               }}
                               initialFocus
                             />

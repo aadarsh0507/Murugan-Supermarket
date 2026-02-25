@@ -2,11 +2,14 @@ import React, { useMemo, useState, useEffect } from 'react';
 import { X, Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/contexts/AuthContext';
+import { usersAPI } from '@/services/api';
 
 const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
   const { selectedStore } = useAuth();
   // Snapshot bill when modal opens so MRP (and rest) don't get overwritten by later parent updates
   const [snapshot, setSnapshot] = useState(null);
+  // Fetched store details (address, phone) so we always show saved values
+  const [storeDetails, setStoreDetails] = useState(null);
 
   useEffect(() => {
     if (!isOpen || !billData) {
@@ -21,7 +24,29 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     });
   }, [isOpen, billData]);
 
+  // Fetch full store details when modal opens so address and phone are shown from saved data
+  useEffect(() => {
+    if (!isOpen) {
+      setStoreDetails(null);
+      return;
+    }
+    let cancelled = false;
+    usersAPI
+      .getSelectedStore()
+      .then((res) => {
+        if (cancelled) return;
+        const store = res?.data?.selectedStore ?? res?.selectedStore ?? null;
+        setStoreDetails(store || null);
+      })
+      .catch(() => {
+        if (!cancelled) setStoreDetails(null);
+      });
+    return () => { cancelled = true; };
+  }, [isOpen]);
+
   const data = snapshot ?? billData;
+  // Prefer fetched store details for address/phone so we show saved values
+  const storeForBill = storeDetails ?? selectedStore;
 
   const printData = useMemo(() => {
     if (!data) {
@@ -201,21 +226,60 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
       data?.cashierName ??
       (data?.userEmail ? data.userEmail : '');
 
+    // Build store address: from bill data, or from storeForBill (fetched store or context)
+    const storeAddressFromStore = (() => {
+      if (data?.address && typeof data.address === 'string') return data.address.trim();
+      if (data?.address && typeof data.address === 'object') {
+        const parts = [
+          data.address.street ?? data.address.addressLine1 ?? data.address.address_line_1,
+          data.address.city ?? data.address.addressCity ?? data.address.address_city,
+          data.address.state ?? data.address.addressState ?? data.address.address_state,
+          data.address.zipCode ?? data.address.zip ?? data.address.pincode ?? data.address.addressZipCode ?? data.address.address_zip
+        ].filter(Boolean);
+        return parts.join(', ');
+      }
+      if (storeForBill?.address) {
+        if (typeof storeForBill.address === 'string') return storeForBill.address.trim();
+        const parts = [
+          storeForBill.address.street ?? storeForBill.address.addressLine1,
+          storeForBill.address.city ?? storeForBill.address.addressCity,
+          storeForBill.address.state ?? storeForBill.address.addressState,
+          storeForBill.address.zipCode ?? storeForBill.address.zip ?? storeForBill.address.pincode
+        ].filter(Boolean);
+        if (parts.length) return parts.join(', ');
+      }
+      // Flat store fields (e.g. from API: addressStreet, addressCity, addressState, addressZipCode)
+      const flat = [
+        storeForBill?.addressStreet ?? storeForBill?.address_line_1,
+        storeForBill?.addressCity ?? storeForBill?.address_city,
+        storeForBill?.addressState ?? storeForBill?.address_state,
+        storeForBill?.addressZipCode ?? storeForBill?.addressZip ?? storeForBill?.pincode
+      ].filter(Boolean);
+      if (flat.length) return flat.join(', ');
+      return '';
+    })();
+
+    // Resolve store phone from bill data or storeForBill (multiple possible field names)
+    const storePhone = (() => {
+      const raw =
+        data?.phone ??
+        data?.storePhone ??
+        storeForBill?.phone ??
+        storeForBill?.phoneNumber ??
+        storeForBill?.mobile ??
+        storeForBill?.contactNumber ??
+        storeForBill?.primaryPhone ??
+        (storeForBill?.contact && typeof storeForBill.contact === 'string' ? storeForBill.contact : null) ??
+        '';
+      const str = String(raw || '').trim();
+      return str ? (str.toLowerCase().startsWith('ph') || str.startsWith('+') ? str : `Ph: ${str}`) : '';
+    })();
+
     return {
-      storeName: selectedStore?.name ?? data?.storeName ?? 'Murugan Super Market',
-      address:
-        data?.address ??
-        (selectedStore?.address
-          ? [
-              selectedStore.address.street,
-              selectedStore.address.city,
-              selectedStore.address.zipCode
-            ]
-              .filter(Boolean)
-              .join(', ')
-          : ''),
-      phone: data?.phone ?? (selectedStore?.phone ? `Ph: ${selectedStore.phone}` : ''),
-      gstNumber: data?.gstNumber ?? selectedStore?.gstNumber ?? '',
+      storeName: storeForBill?.name ?? data?.storeName ?? 'Murugan Super Market',
+      address: storeAddressFromStore,
+      phone: storePhone,
+      gstNumber: data?.gstNumber ?? storeForBill?.gstNumber ?? '',
       date: formattedDate,
       time: formattedTime,
       billNumber: data?.billNo ?? data?.billNumber ?? '',
@@ -236,10 +300,10 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
           : [],
       notes: data?.notes ?? ''
     };
-  }, [data, selectedStore]);
+  }, [data, storeDetails, selectedStore]);
 
   const displayStoreName =
-    selectedStore?.name || data?.storeName || printData.storeName || 'Murugan Super Market';
+    storeForBill?.name || data?.storeName || printData.storeName || 'Murugan Super Market';
 
   const BILL_WIDTH = 56; // Width to show all details fully including full Amount header and values (104mm paper)
   const DIVIDER_MARKER = '__DIVIDER__';
@@ -304,8 +368,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
     if (printData.gstNumber && String(printData.gstNumber).trim()) {
       pushLine(centerText(`GST IN: ${printData.gstNumber}`));
     }
-    if (printData.address) pushLine(centerText(printData.address));
-    if (printData.phone) pushLine(centerText(printData.phone));
+    pushLine(centerText(printData.address ? printData.address : 'Address: -'));
+    pushLine(centerText(printData.phone ? printData.phone : 'Ph: -'));
     divider();
     // Calculate proper alignment for Date/Time and Bill No/User lines
     // Format: "Date : [date]    Time : [time]"

@@ -307,10 +307,12 @@ export default function Billing() {
   const [itemSearchTerm, setItemSearchTerm] = useState("");
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
   const [searchField, setSearchField] = useState(null); // 'sku' or 'name'
+  const [itemSearchHighlightIndex, setItemSearchHighlightIndex] = useState(0);
   const searchInputRef = useRef(null);
   const skuInputRef = useRef(null);
   const nameInputRef = useRef(null);
   const quantityInputRef = useRef(null);
+  const itemHighlightRefs = useRef([]);
   const [recentBills, setRecentBills] = useState([]);
   const [printModalState, setPrintModalState] = useState({ isOpen: false, bill: null });
   const [isFetchingBill, setIsFetchingBill] = useState(false);
@@ -510,6 +512,17 @@ export default function Billing() {
 
     return suggestions.map((item) => normalizeItem(item));
   }, [itemSearchTerm, allItems]);
+
+  // Reset highlight to top when results or dropdown visibility change
+  useEffect(() => {
+    setItemSearchHighlightIndex(0);
+  }, [itemSearchResults.length, showSearchDropdown]);
+
+  // Scroll highlighted item into view when navigating with arrows
+  useEffect(() => {
+    if (!showSearchDropdown || itemSearchResults.length === 0) return;
+    itemHighlightRefs.current[itemSearchHighlightIndex]?.scrollIntoView?.({ block: 'nearest', behavior: 'auto' });
+  }, [itemSearchHighlightIndex, showSearchDropdown, itemSearchResults.length]);
 
   const selectItemFromSearch = (item) => {
     const normalized = normalizeItem(item);
@@ -1477,10 +1490,11 @@ export default function Billing() {
     setScanError(null);
 
     try {
-      // First try to find in preloaded items (faster)
+      // Match by SKU or barcode (aligned with item repo: barcode OR item_code / UniversalProductCode OR ProductCode)
+      const valueUpper = value.toUpperCase();
       const foundItem = allItems.find(i => {
-        const skuMatch = (i.sku || '').toUpperCase() === value.toUpperCase();
-        const barcodeMatch = (i.barcode || '').toUpperCase() === value.toUpperCase();
+        const skuMatch = (i.sku || i.itemCode || '').toString().toUpperCase() === valueUpper;
+        const barcodeMatch = (i.barcode || '').toString().toUpperCase() === valueUpper;
         return skuMatch || barcodeMatch;
       });
 
@@ -1952,11 +1966,25 @@ export default function Billing() {
                               placeholder="Enter P Code"
                               className="h-8 text-sm text-left"
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  if (itemSearchResults.length > 0 && showSearchDropdown) {
+                                if (showSearchDropdown && itemSearchResults.length > 0) {
+                                  if (event.key === "ArrowDown") {
                                     event.preventDefault();
-                                    selectItemFromSearch(itemSearchResults[0]);
-                                  } else if (newItemRow.sku.trim()) {
+                                    setItemSearchHighlightIndex((i) => Math.min(i + 1, itemSearchResults.length - 1));
+                                    return;
+                                  }
+                                  if (event.key === "ArrowUp") {
+                                    event.preventDefault();
+                                    setItemSearchHighlightIndex((i) => Math.max(i - 1, 0));
+                                    return;
+                                  }
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    selectItemFromSearch(itemSearchResults[itemSearchHighlightIndex]);
+                                    return;
+                                  }
+                                }
+                                if (event.key === "Enter") {
+                                  if (newItemRow.sku.trim()) {
                                     event.preventDefault();
                                     addManualItem(activeBillId);
                                   }
@@ -1989,10 +2017,11 @@ export default function Billing() {
                                   </div>
                                 ) : itemSearchResults.length > 0 ? (
                                   <div style={{ maxHeight: `${(dropdownPosition.maxHeight || 500) - 20}px`, overflowY: 'auto' }}>
-                                    {itemSearchResults.map((item) => (
+                                    {itemSearchResults.map((item, idx) => (
                                       <div
                                         key={item.sourceId}
-                                        className="p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors"
+                                        ref={(el) => { itemHighlightRefs.current[idx] = el; }}
+                                        className={`p-2 hover:bg-muted cursor-pointer border-b last:border-b-0 transition-colors ${idx === itemSearchHighlightIndex ? 'bg-primary/10' : ''}`}
                                         onMouseDown={(e) => {
                                           e.preventDefault();
                                           selectItemFromSearch(item);
@@ -2068,11 +2097,25 @@ export default function Billing() {
                               placeholder="Type product name to search..."
                               className="h-8 text-sm font-medium w-full text-left"
                               onKeyDown={(event) => {
-                                if (event.key === "Enter") {
-                                  if (itemSearchResults.length > 0 && showSearchDropdown) {
+                                if (showSearchDropdown && itemSearchResults.length > 0) {
+                                  if (event.key === "ArrowDown") {
                                     event.preventDefault();
-                                    selectItemFromSearch(itemSearchResults[0]);
-                                  } else if (newItemRow.name.trim()) {
+                                    setItemSearchHighlightIndex((i) => Math.min(i + 1, itemSearchResults.length - 1));
+                                    return;
+                                  }
+                                  if (event.key === "ArrowUp") {
+                                    event.preventDefault();
+                                    setItemSearchHighlightIndex((i) => Math.max(i - 1, 0));
+                                    return;
+                                  }
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    selectItemFromSearch(itemSearchResults[itemSearchHighlightIndex]);
+                                    return;
+                                  }
+                                }
+                                if (event.key === "Enter") {
+                                  if (newItemRow.name.trim()) {
                                     event.preventDefault();
                                     addManualItem(activeBillId);
                                   }
@@ -2116,7 +2159,8 @@ export default function Billing() {
                                       {itemSearchResults.map((item, idx) => (
                                         <div
                                           key={item.sourceId}
-                                          className="p-3 hover:bg-primary/10 cursor-pointer border-b last:border-b-0 transition-colors active:bg-primary/20"
+                                          ref={(el) => { itemHighlightRefs.current[idx] = el; }}
+                                          className={`p-3 hover:bg-primary/10 cursor-pointer border-b last:border-b-0 transition-colors active:bg-primary/20 ${idx === itemSearchHighlightIndex ? 'bg-primary/10' : ''}`}
                                           onClick={(e) => {
                                             e.preventDefault();
                                             e.stopPropagation();

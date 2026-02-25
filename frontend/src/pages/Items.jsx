@@ -3320,6 +3320,17 @@ export default function Items() {
                     id="edit-item-barcode"
                     value={editForm.barcode}
                     onChange={handleFormChange('barcode')}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
+                    }}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const pasted = (e.clipboardData?.getData?.('text') || '').trim();
+                      if (pasted) setEditForm((prev) => ({ ...prev, barcode: pasted }));
+                    }}
                     placeholder="Enter barcode"
                   />
                 </div>
@@ -4257,6 +4268,11 @@ export default function Items() {
                     id="create-item-barcode"
                     value={createItemForm.barcode}
                     onChange={(e) => setCreateItemForm(prev => ({ ...prev, barcode: e.target.value }))}
+                    onPaste={(e) => {
+                      e.preventDefault();
+                      const pasted = (e.clipboardData?.getData?.('text') || '').trim();
+                      if (pasted) setCreateItemForm((prev) => ({ ...prev, barcode: pasted }));
+                    }}
                     placeholder="Enter barcode"
                   />
                 </div>
