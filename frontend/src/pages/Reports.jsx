@@ -189,9 +189,7 @@ export default function Reports() {
   const loadSuppliers = async () => {
     try {
       const response = await suppliersAPI.getSuppliers();
-      console.log('Suppliers API Response:', response);
       const suppliersData = response.data?.suppliers || [];
-      console.log('Suppliers Data:', suppliersData);
       setSuppliers(suppliersData);
     } catch (error) {
       console.error("Error loading suppliers:", error);
@@ -240,17 +238,6 @@ export default function Reports() {
         }
         const response = await creditsAPI.getCredits(params);
         const creditsData = response.data?.credits || [];
-        console.log('PO Credits Data:', creditsData);
-        // Log first credit for debugging
-        if (creditsData.length > 0) {
-          console.log('Sample Credit:', {
-            poNumber: creditsData[0].poNumber,
-            initialOriginalAmount: creditsData[0].initialOriginalAmount,
-            originalAmount: creditsData[0].originalAmount,
-            amountChangeHistory: creditsData[0].amountChangeHistory,
-            paymentHistory: creditsData[0].paymentHistory
-          });
-        }
         setCredits(creditsData);
         setCustomerCredits([]);
 
@@ -384,9 +371,7 @@ export default function Reports() {
       }
 
       const response = await purchaseOrdersAPI.getPurchaseOrders(params);
-      console.log('PO API Response:', response);
       const poData = response.data?.purchaseOrders || [];
-      console.log('PO Data:', poData);
       setPurchaseOrders(poData);
 
       const processedData = processPOReportData(poData, poReportType);
@@ -481,7 +466,7 @@ export default function Reports() {
     let storeItemsMap = {};
 
     if (type === "monthly") {
-      // Process by month
+      // Process by month (keyed by yyyy-MM so sorting is chronological)
       const monthlyData = pos.reduce((acc, po) => {
         const date = new Date(po.orderDate);
         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -498,10 +483,13 @@ export default function Reports() {
         return acc;
       }, {});
 
-      chartData = Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month));
-      tableData = Object.values(monthlyData).sort((a, b) => b.value - a.value);
+      chartData = Object.entries(monthlyData)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([, value]) => value);
+      // Keep the PO monthly table in the same chronological order as the chart
+      tableData = chartData;
     } else if (type === "daily") {
-      // Process by day
+      // Process by day (keyed by ISO date so sorting is chronological)
       const dailyData = pos.reduce((acc, po) => {
         const date = new Date(po.orderDate);
         const dayKey = date.toISOString().split('T')[0];
@@ -518,7 +506,10 @@ export default function Reports() {
         return acc;
       }, {});
 
-      chartData = Object.values(dailyData).sort((a, b) => a.day.localeCompare(b.day)).slice(-30);
+      chartData = Object.entries(dailyData)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([, value]) => value)
+        .slice(-30);
       tableData = Object.values(dailyData).sort((a, b) => b.value - a.value).slice(0, 20);
     } else if (type === "supplierwise") {
       // Use supplier data for charts
@@ -643,20 +634,6 @@ export default function Reports() {
                 items: detailedBill.items || bill.items || []
               };
               
-              // Debug: Log if items are missing
-              if (!mergedBill.items || mergedBill.items.length === 0) {
-                console.log(`Bill ${billId} has no items:`, {
-                  billId,
-                  billItems: bill.items,
-                  detailedBillItems: detailedBill.items,
-                  detailedBill: detailedBill,
-                  billDetailResponse: billDetail,
-                  mergedItems: mergedBill.items
-                });
-              } else {
-                console.log(`Bill ${billId} has ${mergedBill.items.length} items:`, mergedBill.items);
-              }
-              
               return mergedBill;
             } catch (error) {
               console.error(`Error fetching bill ${bill.id} details:`, error);
@@ -692,33 +669,7 @@ export default function Reports() {
         setDetailedBills([]);
       }
 
-      // Debug: Log first few bills to check user data
-      if (reportType === "userwise" && billsForProcessing.length > 0) {
-        console.log(`[Store: ${storeId}] Sample bills for user-wise report:`, billsForProcessing.slice(0, 3).map(bill => ({
-          id: bill.id,
-          billNo: bill.billNo,
-          storeId: bill.storeId,
-          userId: bill.userId || bill.user_id,
-          userName: bill.userName,
-          userEmail: bill.userEmail,
-          user_first_name: bill.user_first_name,
-          user_last_name: bill.user_last_name,
-          user_email: bill.user_email,
-          hasUserData: !!(bill.userName || bill.user_first_name || bill.user_last_name || bill.user_email)
-        })));
-      }
-      
       const processedData = processReportData(billsForProcessing, reportType);
-      
-      // Debug: Log processed data for user-wise reports
-      if (reportType === "userwise") {
-        console.log(`[Store: ${storeId}] Processed user-wise data:`, {
-          totalBills: billsForProcessing.length,
-          userDataCount: processedData.tableData?.length || 0,
-          userData: processedData.tableData
-        });
-      }
-      
       setReportData(processedData);
     } catch (error) {
       console.error("Error loading report data:", error);
@@ -750,6 +701,7 @@ export default function Reports() {
     let tableData = [];
 
     if (type === "monthly") {
+      // Aggregate by month key yyyy-MM so both chart and table are in chronological month order
       const monthlyData = bills.reduce((acc, bill) => {
         const date = new Date(bill.createdAt);
         const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -770,9 +722,13 @@ export default function Reports() {
         return acc;
       }, {});
 
-      chartData = Object.values(monthlyData).sort((a, b) => a.month.localeCompare(b.month));
-      tableData = Object.values(monthlyData).sort((a, b) => b.revenue - a.revenue);
+      chartData = Object.entries(monthlyData)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([, value]) => value);
+      // Show the detailed monthly table in the same chronological order as the chart
+      tableData = chartData;
     } else if (type === "daily") {
+      // Aggregate by ISO date so days are in correct order
       const dailyData = bills.reduce((acc, bill) => {
         const date = new Date(bill.createdAt);
         const dayKey = date.toISOString().split('T')[0];
@@ -793,7 +749,10 @@ export default function Reports() {
         return acc;
       }, {});
 
-      chartData = Object.values(dailyData).sort((a, b) => a.day.localeCompare(b.day)).slice(-30);
+      chartData = Object.entries(dailyData)
+        .sort((a, b) => a[0].localeCompare(b[0]))
+        .map(([, value]) => value)
+        .slice(-30);
       tableData = Object.values(dailyData).sort((a, b) => b.revenue - a.revenue).slice(0, 20);
     } else if (type === "userwise") {
       const userData = bills.reduce((acc, bill) => {
@@ -861,11 +820,7 @@ export default function Reports() {
       }, {});
       
       // Debug: Log user data aggregation
-      if (Object.keys(userData).length > 0) {
-        console.log('User-wise report aggregated data:', Object.values(userData));
-      } else {
-        console.warn('User-wise report: No user data found in bills');
-      }
+      // Aggregated user-wise data is available in userData if needed for debugging
 
       chartData = Object.values(userData).sort((a, b) => b.revenue - a.revenue);
       tableData = Object.values(userData).sort((a, b) => b.revenue - a.revenue);
@@ -1322,17 +1277,13 @@ export default function Reports() {
     }
   };
 
-  console.log('Current active tab:', activeTab);
-  console.log('PO Report Data:', poReportData);
-  console.log('Suppliers:', suppliers);
-
   return (
-    <div className="space-y-6 p-4 md:p-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-4 sm:space-y-6 p-3 sm:p-4 md:p-6 pb-10 min-w-0 overflow-x-hidden">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
         <motion.div
           initial={{ opacity: 0, x: -20 }}
           animate={{ opacity: 1, x: 0 }}
-          className="flex items-center gap-4"
+          className="flex items-center gap-2 sm:gap-4 min-w-0"
         >
           <Button
             variant="ghost"
@@ -1372,7 +1323,6 @@ export default function Reports() {
           variant={activeTab === "sales" ? "default" : "ghost"}
           onClick={() => {
             setActiveTab("sales");
-            console.log('Switched to sales tab');
           }}
           className="flex items-center gap-2"
         >
@@ -1383,7 +1333,6 @@ export default function Reports() {
           variant={activeTab === "purchase" ? "default" : "ghost"}
           onClick={() => {
             setActiveTab("purchase");
-            console.log('Switched to purchase tab');
           }}
           className="flex items-center gap-2"
         >
@@ -1724,7 +1673,7 @@ export default function Reports() {
       {/* Sales Reports */}
       {activeTab === "sales" && reportData && (
         <>
-          <div className="grid md:grid-cols-4 gap-4 md:gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6 min-w-0">
             <MetricCard
               title="Total Revenue"
               value={`₹${reportData.summary.totalRevenue}`}
@@ -1752,28 +1701,30 @@ export default function Reports() {
           </div>
 
           {reportType !== "detailed" && reportData.chartData.length > 0 && (
-            <div className="grid lg:grid-cols-2 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 min-w-0">
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.5 }}
+                className="min-w-0"
               >
-                <Card>
-                  <CardHeader>
-                    <CardTitle>
+                <Card className="overflow-hidden">
+                  <CardHeader className="px-3 sm:px-6 py-4">
+                    <CardTitle className="text-base sm:text-lg">
                       {reportType === "monthly" && "Monthly Revenue"}
                       {reportType === "daily" && "Daily Revenue"}
                       {reportType === "userwise" && "User-wise Revenue"}
                       {reportType === "detailed" && "Bill Detailed Report"}
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
+                  <CardContent className="px-2 sm:px-4 md:px-6 pb-6 pt-0">
                     {reportType === "detailed" ? (
                       <div className="text-center py-8 text-muted-foreground">
                         Select date range and click "Generate Report" to view detailed bills
                       </div>
                     ) : (
-                      <ResponsiveContainer width="100%" height={300}>
+                      <div className="w-full min-w-0 h-[280px] sm:h-[300px]">
+                      <ResponsiveContainer width="100%" height="100%">
                         {reportType === "userwise" ? (
                           <PieChart>
                             <Pie
@@ -1813,6 +1764,7 @@ export default function Reports() {
                           </BarChart>
                         )}
                       </ResponsiveContainer>
+                      </div>
                     )}
                   </CardContent>
                 </Card>
@@ -1822,17 +1774,19 @@ export default function Reports() {
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: 0.6 }}
+                className="min-w-0"
               >
-                <Card>
-                  <CardHeader>
-                    <CardTitle>
+                <Card className="overflow-hidden">
+                  <CardHeader className="px-3 sm:px-6 py-4">
+                    <CardTitle className="text-base sm:text-lg">
                       {reportType === "monthly" && "Monthly Bills Trend"}
                       {reportType === "daily" && "Daily Bills Trend"}
                       {reportType === "userwise" && "User-wise Bills"}
                     </CardTitle>
                   </CardHeader>
-                  <CardContent>
-                    <ResponsiveContainer width="100%" height={300}>
+                  <CardContent className="px-2 sm:px-4 md:px-6 pb-6 pt-0">
+                    <div className="w-full min-w-0 h-[280px] sm:h-[300px]">
+                    <ResponsiveContainer width="100%" height="100%">
                       {reportType === "userwise" ? (
                         <BarChart data={reportData.chartData}>
                           <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
@@ -1878,6 +1832,7 @@ export default function Reports() {
                         </LineChart>
                       )}
                     </ResponsiveContainer>
+                    </div>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -2681,16 +2636,6 @@ export default function Reports() {
                       </TableHeader>
                       <TableBody>
                         {creditReportData.tableData.map((credit, index) => {
-                          // Debug log for problematic credits
-                          if (credit.poNumber === 'PO-2025-0011' || credit.poNumber === 'PO-2025-0010') {
-                            console.log(`Credit ${credit.poNumber}:`, {
-                              initialOriginalAmount: credit.initialOriginalAmount,
-                              originalAmount: credit.originalAmount,
-                              amountChangeHistory: credit.amountChangeHistory,
-                              purchaseOrder: credit.purchaseOrder
-                            });
-                          }
-
                           // Get initial amount - check multiple possible fields
                           // Priority: initialOriginalAmount > purchaseOrder.total > originalAmount
                           let initialAmount = credit.originalAmount || 0;

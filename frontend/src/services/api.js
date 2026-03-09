@@ -555,6 +555,63 @@ export const billsAPI = {
   },
 };
 
+// Mobile App Orders API - backed by `orders` table (Super_Mart_Mobile_app DB)
+export const ordersAPI = {
+  // Get all mobile app orders
+  getOrders: async (params = {}) => {
+    const queryString = new URLSearchParams(params).toString();
+    // Backend route is /mobile-orders → proxied as /api/mobile-orders
+    const endpoint = queryString ? `/mobile-orders?${queryString}` : '/mobile-orders';
+    return await apiRequest(endpoint);
+  },
+
+  // Get single mobile app order by ID
+  getOrder: async (orderId) => {
+    if (!orderId) {
+      throw new Error('Order ID is required');
+    }
+    return await apiRequest(`/mobile-orders/${orderId}`);
+  },
+
+  // Update order status for a mobile app order
+  updateOrderStatus: async (orderId, status) => {
+    if (!orderId) {
+      throw new Error('Order ID is required');
+    }
+    if (!status) {
+      throw new Error('Order status is required');
+    }
+    return await apiRequest(`/mobile-orders/${orderId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  },
+
+  // Update delivery-related metadata for a mobile app order
+  updateOrderMeta: async (orderId, meta = {}) => {
+    if (!orderId) {
+      throw new Error('Order ID is required');
+    }
+    return await apiRequest(`/mobile-orders/${orderId}/meta`, {
+      method: 'PATCH',
+      body: JSON.stringify(meta),
+    });
+  },
+
+  // Get global delivery settings for mobile app
+  getDeliverySettings: async () => {
+    return await apiRequest('/mobile-orders/settings');
+  },
+
+  // Update global delivery settings for mobile app
+  updateDeliverySettings: async (settings) => {
+    return await apiRequest('/mobile-orders/settings', {
+      method: 'PUT',
+      body: JSON.stringify(settings),
+    });
+  },
+};
+
 // Suppliers API
 const splitContactName = (fullName = "") => {
   if (!fullName || typeof fullName !== "string") {

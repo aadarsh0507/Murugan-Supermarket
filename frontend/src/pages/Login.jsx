@@ -55,31 +55,31 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen bg-white relative">
-      {/* Pushdiggy Logo - Top Right Corner */}
-      <div className="absolute top-2 right-4 z-50">
-        <img
-          src="/pushdiggylogo.jpg"
-          alt="Pushdiggy Logo"
-          className="h-36 w-auto object-contain"
-        />
-      </div>
-
-      {/* Red Header */}
-      <div className="bg-red-600 h-16 flex items-center px-8">
-        <div className="flex items-center">
+    <div className="flex min-h-screen min-w-0 flex-col bg-white overflow-x-hidden">
+      {/* Red Header: single row, logo + name left, Pushdiggy right; responsive padding and sizes */}
+      <header className="bg-red-600 min-h-14 sm:h-16 flex items-center justify-between gap-2 px-3 sm:px-4 md:px-6 lg:px-8">
+        <div className="flex min-w-0 flex-shrink items-center gap-2 sm:gap-3">
           <img
             src="/favicon.ico"
             alt="Logo"
-            className="h-19 w-19 mr-3 object-contain"
+            className="h-8 w-8 sm:h-9 sm:w-9 md:h-10 md:w-10 flex-shrink-0 object-contain"
           />
-          <span className="text-white text-2xl font-bold">Murugan</span>
-          <span className="text-yellow-300 text-xl ml-2">Super Mart</span>
+          <div className="flex items-baseline gap-1 sm:gap-2 min-w-0">
+            <span className="text-white text-lg font-bold truncate sm:text-xl md:text-2xl">Murugan</span>
+            <span className="text-yellow-300 text-base sm:text-lg md:text-xl flex-shrink-0">Super Mart</span>
+          </div>
         </div>
-      </div>
+        <div className="flex-shrink-0">
+          <img
+            src="/pushdiggylogo.jpg"
+            alt="Pushdiggy"
+            className="h-8 w-auto max-h-12 object-contain sm:h-10 md:h-12 lg:h-14"
+          />
+        </div>
+      </header>
 
       {/* Main Content */}
-      <div className="flex h-[calc(100vh-128px)]">
+      <div className="flex flex-1 min-h-0 w-full min-w-0">
         {/* Left Side - Supermarket Image */}
         <div className="hidden lg:flex lg:w-2/3 relative overflow-hidden items-center justify-center p-2">
           <div className="relative w-full h-full">
@@ -93,9 +93,9 @@ export default function Login() {
         </div>
 
         {/* Right Side - Login Form */}
-        <div className="w-full lg:w-1/3 flex items-center justify-center p-4 bg-white">
-          <div className="w-full max-w-lg">
-            <div className="bg-white rounded-xl shadow-2xl p-12 border-4 border-gray-200 relative">
+        <div className="w-full min-w-0 lg:w-1/3 flex items-center justify-center p-3 sm:p-4 bg-white overflow-auto">
+          <div className="w-full max-w-lg min-w-0">
+            <div className="bg-white rounded-xl shadow-2xl p-6 sm:p-8 md:p-10 lg:p-12 border-2 sm:border-4 border-gray-200 relative">
               <div className="absolute inset-0 rounded-xl border-2 border-white shadow-inner"></div>
               <div className="relative z-10">
                 <h2 className="text-2xl font-bold text-center mb-6 text-gray-800">
@@ -187,30 +187,38 @@ export default function Login() {
         </div>
       </div>
 
-      {/* Red Footer */}
-      <div className="bg-red-600 h-16 flex items-center justify-between px-8">
-        <div className="flex items-center gap-2 text-white text-sm">
-          <img
-            src="/android-chrome.png"
-            alt="Chrome Icon"
-            className="h-7 w-7 object-contain"
-          />
-          info@pushdiggy.gmail.com
-        </div>
-        <div className="flex items-center space-x-4">
-          <Facebook className="h-5 w-5 text-white cursor-pointer" />
-          <div className="w-5 h-5 bg-white rounded-full flex items-center justify-center cursor-pointer">
-            <span className="text-red-600 text-xs font-bold">g+</span>
+      {/* Red Footer: responsive padding, wraps on small screens, no overflow */}
+      <footer className="bg-red-600 min-h-14 sm:min-h-16 w-full min-w-0 overflow-hidden">
+        <div className="flex flex-col gap-2 px-3 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4 sm:px-4 sm:py-4 md:px-6 lg:px-8">
+          <div className="flex min-w-0 flex-shrink items-center justify-center gap-2 text-white sm:justify-start">
+            <img
+              src="/android-chrome.png"
+              alt="Chrome Icon"
+              className="h-5 w-5 flex-shrink-0 object-contain sm:h-6 sm:w-6"
+            />
+            <a
+              href="mailto:info@pushdiggy.gmail.com"
+              className="text-xs text-white underline-offset-2 hover:underline sm:text-sm truncate min-w-0"
+            >
+              info@pushdiggy.gmail.com
+            </a>
           </div>
-          <Mail
-            className="h-5 w-5 text-white cursor-pointer hover:text-yellow-300 transition-colors"
-            onClick={handleMailClick}
-            title="Send email to jprsupermarket@gmail.com"
-          />
-          <Linkedin className="h-5 w-5 text-white cursor-pointer" />
-          <Twitter className="h-5 w-5 text-white cursor-pointer" />
+          <div className="flex items-center justify-center gap-3 sm:gap-4 sm:flex-shrink-0">
+            <Facebook className="h-4 w-4 text-white cursor-pointer sm:h-5 sm:w-5" aria-hidden />
+            <div className="h-4 w-4 sm:h-5 sm:w-5 bg-white rounded-full flex items-center justify-center cursor-pointer flex-shrink-0">
+              <span className="text-red-600 text-[10px] font-bold sm:text-xs">g+</span>
+            </div>
+            <Mail
+              className="h-4 w-4 sm:h-5 sm:w-5 text-white cursor-pointer hover:text-yellow-300 transition-colors flex-shrink-0"
+              onClick={handleMailClick}
+              title="Send email to jprsupermarket@gmail.com"
+              aria-label="Email"
+            />
+            <Linkedin className="h-4 w-4 text-white cursor-pointer sm:h-5 sm:w-5" aria-hidden />
+            <Twitter className="h-4 w-4 text-white cursor-pointer sm:h-5 sm:w-5" aria-hidden />
+          </div>
         </div>
-      </div>
+      </footer>
     </div>
   );
 }

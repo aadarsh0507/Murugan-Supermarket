@@ -19,6 +19,7 @@ import Suppliers from "./pages/Suppliers";
 import Stores from "./pages/Stores";
 import SelectStore from "./pages/SelectStore";
 import PurchaseOrders from "./pages/PurchaseOrders";
+import Orders from "./pages/Orders";
 import Credits from "./pages/Credits";
 import NotFound from "./pages/NotFound";
 import Billing from "./pages/Billing";
@@ -141,6 +142,14 @@ const App = () => (
               element={
                 <ProtectedRoute screenId={SCREEN_KEY_TO_ID["purchase-orders"]}>
                   <Layout><PurchaseOrders /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/orders"
+              element={
+                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["orders"]}>
+                  <Layout><Orders /></Layout>
                 </ProtectedRoute>
               }
             />

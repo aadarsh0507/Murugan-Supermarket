@@ -15,23 +15,28 @@ export function MetricCard({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4, delay }}
     >
-      <Card className="hover:shadow-lg transition-shadow duration-300">
-        <CardContent className="p-4 sm:p-6">
-          <div className="flex items-center justify-between gap-3">
-            <div className="space-y-1 min-w-0">
-              <p className="text-xs sm:text-sm font-medium text-muted-foreground truncate">{title}</p>
-              <p className="text-2xl sm:text-3xl font-bold truncate">{value}</p>
+      <Card className="hover:shadow-lg transition-shadow duration-300 h-full">
+        <CardContent className="p-4 sm:p-6 h-full">
+          <div className="flex h-full items-center justify-between gap-3">
+            <div className="space-y-1 min-w-0 flex-1">
+              <p className="text-xs sm:text-sm font-medium text-muted-foreground truncate">
+                {title}
+              </p>
+              <p className="text-xl sm:text-2xl md:text-3xl font-bold whitespace-nowrap">
+                {value}
+              </p>
               {trend && (
                 <p
-                  className={`text-sm font-medium ${
+                  className={`text-xs sm:text-sm font-medium truncate ${
                     trendUp ? "text-success" : "text-destructive"
                   }`}
+                  title={trend}
                 >
                   {trend}
                 </p>
               )}
             </div>
-            <div className="h-12 w-12 rounded-xl bg-gradient-primary flex items-center justify-center">
+            <div className="h-12 w-12 rounded-xl bg-gradient-primary flex items-center justify-center flex-shrink-0">
               <Icon className="h-6 w-6 text-primary-foreground" />
             </div>
           </div>

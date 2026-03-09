@@ -1555,19 +1555,19 @@ export default function Billing() {
   const billTotals = activeBill ? getBillTotals(activeBill) : { total: 0, subtotal: 0, discount: 0, tax: 0, savings: 0 };
 
   return (
-    <div className="relative -m-6 bg-background flex flex-col overflow-hidden" style={{ height: 'calc(100vh - 10rem)' }}>
+    <div className="relative -m-3 sm:-m-4 md:-m-6 bg-background flex flex-col overflow-hidden min-w-0" style={{ height: 'calc(100vh - 10rem)' }}>
       {/* Header Bar */}
-      <div className="bg-primary text-primary-foreground flex flex-col border-b shadow-sm">
+      <div className="bg-primary text-primary-foreground flex flex-col border-b shadow-sm min-w-0">
         {/* Total Amount Display - Big and Prominent */}
-        <div className="px-6 py-4 bg-primary/90 border-b border-primary-foreground/20">
-          <div className="flex items-center justify-between">
-            <div className="flex items-baseline gap-3">
-              <span className="text-sm font-medium text-primary-foreground/80">Total Amount:</span>
-              <span className="text-4xl font-bold text-primary-foreground tracking-tight">
+        <div className="px-3 py-3 sm:px-4 sm:py-4 md:px-6 bg-primary/90 border-b border-primary-foreground/20">
+          <div className="flex flex-col gap-3 min-[480px]:flex-row min-[480px]:items-center min-[480px]:justify-between">
+            <div className="flex items-baseline gap-2 sm:gap-3 min-w-0">
+              <span className="text-sm font-medium text-primary-foreground/80 shrink-0">Total Amount:</span>
+              <span className="text-2xl sm:text-3xl md:text-4xl font-bold text-primary-foreground tracking-tight truncate">
                 {toCurrency(billTotals.total)}
               </span>
             </div>
-            <div className="flex items-center gap-6 text-sm">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-6 text-sm">
               <div className="flex flex-col items-end">
                 <span className="text-primary-foreground/70">Subtotal</span>
                 <span className="font-semibold text-primary-foreground">{toCurrency(billTotals.subtotal)}</span>
@@ -1593,37 +1593,37 @@ export default function Billing() {
             </div>
           </div>
         </div>
-        
-        {/* Top Row - Title and Actions */}
-        <div className="px-6 py-3 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <h1 className="text-xl font-bold flex items-center gap-2">
-              <Receipt className="h-6 w-6" />
+
+        {/* Top Row - Title and Actions: stack on mobile so buttons don't overflow */}
+        <div className="px-3 py-2 sm:px-4 sm:py-3 md:px-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between min-w-0">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0 shrink-0">
+            <h1 className="text-lg sm:text-xl font-bold flex items-center gap-2 truncate">
+              <Receipt className="h-5 w-5 sm:h-6 sm:w-6 shrink-0" />
               Billing
             </h1>
             {activeBill?.savedBillNo && (
-              <span className="text-sm bg-primary-foreground/20 px-3 py-1 rounded-full">
+              <span className="text-xs sm:text-sm bg-primary-foreground/20 px-2 py-0.5 sm:px-3 sm:py-1 rounded-full shrink-0">
                 Bill #{activeBill.savedBillNo}
               </span>
             )}
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
             <Button
               variant="secondary"
               size="sm"
               onClick={() => setIsReprintModalOpen(true)}
-              className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground"
+              className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground shrink-0 text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3"
             >
-              <Printer className="h-4 w-4 mr-2" />
+              <Printer className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 sm:mr-2" />
               Reprint
             </Button>
             <Button
               variant="secondary"
               size="sm"
               onClick={() => clearBill(activeBillId)}
-              className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground"
+              className="bg-primary-foreground/10 hover:bg-primary-foreground/20 text-primary-foreground shrink-0 text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3"
             >
-              <Trash2 className="h-4 w-4 mr-2" />
+              <Trash2 className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 sm:mr-2" />
               Clear
             </Button>
             <Button
@@ -1645,17 +1645,17 @@ export default function Billing() {
                 }
               }}
               disabled={bills.length >= MAX_BILL_TABS}
-              className="bg-primary-foreground hover:bg-primary-foreground/90 text-primary disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-primary-foreground hover:bg-primary-foreground/90 text-primary disabled:opacity-50 disabled:cursor-not-allowed shrink-0 text-xs sm:text-sm h-8 sm:h-9 px-2 sm:px-3"
             >
-              <Plus className="h-4 w-4 mr-2" />
+              <Plus className="h-3.5 w-3.5 sm:h-4 sm:w-4 mr-1.5 sm:mr-2" />
               New Bill
             </Button>
           </div>
         </div>
-        
+
         {/* Bill Tabs - Always show, at the top */}
         {bills.length > 0 && (
-          <div className="px-4 pb-2 border-t border-primary-foreground/20">
+          <div className="px-3 pb-2 sm:px-4 md:px-6 border-t border-primary-foreground/20 min-w-0">
             <div className="flex gap-2 overflow-x-auto">
               {bills.map((bill) => {
                 const billNumber = getBillNumber(bill);
@@ -1691,12 +1691,12 @@ export default function Billing() {
         )}
       </div>
 
-      {/* Main Content Area */}
-      <div className="flex-1 flex overflow-hidden">
+      {/* Main Content Area: stack right panel below on small screens */}
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-w-0">
         {/* Left Panel - Items Display */}
-        <div className="flex-1 flex flex-col bg-muted/30 overflow-hidden">
+        <div className="flex-1 flex flex-col bg-muted/30 overflow-hidden min-w-0">
           {/* Barcode Input Only */}
-          <div className="p-4 border-b bg-background shadow-sm">
+          <div className="p-3 sm:p-4 border-b bg-background shadow-sm min-w-0">
             <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
               <div className="relative flex-1">
                 <ScanBarcode className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-muted-foreground" />
@@ -2442,8 +2442,8 @@ export default function Billing() {
         </div>
 
         {/* Right Panel - Payment & Summary */}
-        <div className="w-96 bg-background border-l flex flex-col overflow-hidden">
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="w-full lg:w-96 flex-shrink-0 lg:flex-shrink-0 bg-background border-t lg:border-t-0 lg:border-l flex flex-col overflow-hidden min-w-0">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6">
             {/* Discount & Tax - At Top */}
             <Card>
               <CardHeader>
@@ -2526,7 +2526,7 @@ export default function Billing() {
           </div>
 
           {/* Footer - Create Bill Button */}
-          <div className="border-t p-6 bg-background">
+          <div className="border-t p-3 sm:p-4 md:p-6 bg-background">
             {activeBill?.error && (
               <p className="text-sm text-destructive mb-3">{activeBill.error}</p>
             )}

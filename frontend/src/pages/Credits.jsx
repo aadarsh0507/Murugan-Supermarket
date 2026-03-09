@@ -1591,13 +1591,13 @@ const Credits = () => {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0 overflow-x-hidden">
       {/* Header */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-2xl text-blue-600 flex items-center gap-2">
-              <CreditCard className="h-6 w-6" />
+      <Card className="overflow-hidden">
+        <CardHeader className="px-3 py-4 sm:px-6 sm:py-6">
+          <div className="flex items-center min-w-0">
+            <CardTitle className="text-xl sm:text-2xl text-blue-600 flex items-center gap-2 truncate">
+              <CreditCard className="h-5 w-5 sm:h-6 sm:w-6 shrink-0" />
               SUPPLIER CREDITS
             </CardTitle>
           </div>
@@ -1605,16 +1605,16 @@ const Credits = () => {
       </Card>
 
       {/* Filters */}
-      <Card>
-        <CardContent className="pt-6">
-          <div className="grid grid-cols-5 gap-4">
-            <div>
+      <Card className="overflow-hidden">
+        <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+            <div className="min-w-0">
               <Label>Credit Type</Label>
               <Select
                 value={creditTypeFilter}
                 onValueChange={setCreditTypeFilter}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-10 mt-1.5">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1623,7 +1623,7 @@ const Credits = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div>
+            <div className="min-w-0">
               <Label>Search</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1631,17 +1631,17 @@ const Credits = () => {
                   placeholder={creditTypeFilter === "po" ? "Search by PO number..." : "Search by customer name or bill number..."}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8"
+                  className="pl-8 h-10 mt-1.5"
                 />
               </div>
             </div>
-            <div>
+            <div className="min-w-0">
               <Label>Status</Label>
               <Select
                 value={statusFilter || "all"}
                 onValueChange={(value) => setStatusFilter(value === "all" ? "" : value)}
               >
-                <SelectTrigger>
+                <SelectTrigger className="h-10 mt-1.5">
                   <SelectValue placeholder="All Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1653,13 +1653,13 @@ const Credits = () => {
               </Select>
             </div>
             {creditTypeFilter === "po" && (
-              <div>
+              <div className="min-w-0">
                 <Label>Supplier</Label>
                 <Select
                   value={supplierFilter || "all"}
                   onValueChange={(value) => setSupplierFilter(value === "all" ? "" : value)}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="h-10 mt-1.5">
                     <SelectValue placeholder="All Suppliers" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1686,7 +1686,8 @@ const Credits = () => {
                 </Select>
               </div>
             )}
-            <div className="flex items-end">
+            <div className="flex flex-col min-w-0">
+              <Label className="invisible h-5">Clear</Label>
               <Button
                 variant="outline"
                 onClick={() => {
@@ -1694,7 +1695,7 @@ const Credits = () => {
                   setStatusFilter("");
                   setSupplierFilter("");
                 }}
-                className="w-full"
+                className="w-full h-10 mt-1.5 shrink-0"
               >
                 Clear Filters
               </Button>
@@ -1704,8 +1705,8 @@ const Credits = () => {
       </Card>
 
       {/* Credits Table */}
-      <Card>
-        <CardContent className="pt-6">
+      <Card className="overflow-hidden">
+        <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
           {selectedCredits.length > 0 && (
             <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
               <div>
@@ -1725,11 +1726,11 @@ const Credits = () => {
               </Button>
             </div>
           )}
-          <div className="overflow-x-auto">
-            <Table>
+          <div className="overflow-x-auto min-w-0 -mx-1 sm:mx-0">
+            <Table className="w-full min-w-[640px]">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-12">
+                  <TableHead className="w-10 sm:w-12 px-3 py-3 text-left align-middle">
                     <input
                       type="checkbox"
                       checked={
@@ -1744,23 +1745,23 @@ const Credits = () => {
                   </TableHead>
                   {creditTypeFilter === "po" ? (
                     <>
-                      <TableHead>PO Number</TableHead>
-                      <TableHead>Supplier</TableHead>
-                      <TableHead>Order Date</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">PO Number</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Supplier</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Order Date</TableHead>
                     </>
                   ) : (
                     <>
-                      <TableHead>Bill Number</TableHead>
-                      <TableHead>Customer</TableHead>
-                      <TableHead>Bill Date</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">Bill Number</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Customer</TableHead>
+                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Bill Date</TableHead>
                     </>
                   )}
-                  <TableHead>Initial Amount</TableHead>
-                  <TableHead>Current Amount</TableHead>
-                  <TableHead>Paid Amount</TableHead>
-                  <TableHead>Balance</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>
+                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Initial Amount</TableHead>
+                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Current Amount</TableHead>
+                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Paid Amount</TableHead>
+                  <TableHead className="px-3 py-3 text-right align-middle min-w-[80px]">Balance</TableHead>
+                  <TableHead className="px-3 py-3 text-left align-middle min-w-[80px]">Status</TableHead>
+                  <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">
                     <div className="flex items-center gap-2">
                       <span>Changes</span>
                       <Button
@@ -1796,7 +1797,7 @@ const Credits = () => {
                       </Button>
                     </div>
                   </TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead className="px-3 py-3 text-right align-middle min-w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1817,7 +1818,7 @@ const Credits = () => {
                 ) : (
                   (creditTypeFilter === "po" ? credits : customerCredits).map((credit) => (
                     <TableRow key={credit._id}>
-                      <TableCell>
+                      <TableCell className="px-3 py-3 align-middle w-10 sm:w-12">
                         {credit.status !== "paid" && (credit.balanceAmount || 0) > 0 && (
                           <input
                             type="checkbox"
@@ -1829,13 +1830,13 @@ const Credits = () => {
                       </TableCell>
                       {creditTypeFilter === "po" ? (
                         <>
-                          <TableCell className="font-medium">
+                          <TableCell className="font-medium px-3 py-3 text-left align-middle">
                             {credit.poNumber || credit.purchaseOrder?.poNumber || credit.po_number || 'N/A'}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="px-3 py-3 text-left align-middle">
                             {credit.supplierName || credit.supplier?.companyName || "N/A"}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="px-3 py-3 text-left align-middle whitespace-nowrap">
                             {credit.orderDate
                               ? format(new Date(credit.orderDate), "dd-MM-yyyy")
                               : "N/A"}
@@ -1843,20 +1844,20 @@ const Credits = () => {
                         </>
                       ) : (
                         <>
-                          <TableCell className="font-medium">
+                          <TableCell className="font-medium px-3 py-3 text-left align-middle">
                             {credit.billNumber || "N/A"}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="px-3 py-3 text-left align-middle">
                             {credit.customerName || "N/A"}
                           </TableCell>
-                          <TableCell>
+                          <TableCell className="px-3 py-3 text-left align-middle whitespace-nowrap">
                             {credit.billDate
                               ? format(new Date(credit.billDate), "dd-MM-yyyy")
                               : "N/A"}
                           </TableCell>
                         </>
                       )}
-                      <TableCell className="font-medium">
+                      <TableCell className="font-medium px-3 py-3 text-right align-middle">
                         {(() => {
                           // Initial Amount should ALWAYS show the original PO amount (never changes)
                           // This is the amount from the PO before any edits
@@ -1891,21 +1892,21 @@ const Credits = () => {
                           return `₹${Math.round(initialAmount)}`;
                         })()}
                       </TableCell>
-                      <TableCell className="font-medium">
+                      <TableCell className="font-medium px-3 py-3 text-right align-middle">
                         {(() => {
                           // Current Amount shows the edited/updated amount (originalAmount)
                           const currentAmount = credit.originalAmount || 0;
                           return `₹${Math.round(currentAmount)}`;
                         })()}
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="px-3 py-3 text-right align-middle">
                         ₹{Math.round(credit.paidAmount || 0)}
                       </TableCell>
-                      <TableCell className="font-semibold text-blue-600">
+                      <TableCell className="font-semibold text-blue-600 px-3 py-3 text-right align-middle">
                         ₹{Math.round(credit.balanceAmount || 0)}
                       </TableCell>
-                      <TableCell>{getStatusBadge(credit.status)}</TableCell>
-                      <TableCell>
+                      <TableCell className="px-3 py-3 text-left align-middle">{getStatusBadge(credit.status)}</TableCell>
+                      <TableCell className="px-3 py-3 text-left align-middle">
                         {(() => {
                           // Calculate initial amount using the same logic as Initial Amount column
                           let initialAmount = 0;
@@ -1944,8 +1945,8 @@ const Credits = () => {
                           );
                         })()}
                       </TableCell>
-                      <TableCell>
-                        <div className="flex gap-2">
+                      <TableCell className="px-3 py-3 text-right align-middle">
+                        <div className="flex gap-2 justify-end flex-wrap">
                           {creditTypeFilter === "billing" && (
                             <Button
                               variant="outline"

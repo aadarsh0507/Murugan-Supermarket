@@ -9,6 +9,7 @@ const initialState = {
   isAuthenticated: false,
   isLoading: true,
   error: null,
+  showLoginSuccess: false,
 };
 
 // Action types
@@ -26,6 +27,8 @@ const AUTH_ACTIONS = {
   UPDATE_USER: 'UPDATE_USER',
   UPDATE_SELECTED_STORE: 'UPDATE_SELECTED_STORE',
   CLEAR_ERROR: 'CLEAR_ERROR',
+  SET_SHOW_LOGIN_SUCCESS: 'SET_SHOW_LOGIN_SUCCESS',
+  CLEAR_LOGIN_SUCCESS: 'CLEAR_LOGIN_SUCCESS',
 };
 
 const resolveScreenId = (value) => {
@@ -147,6 +150,7 @@ const authReducer = (state, action) => {
         isAuthenticated: true,
         isLoading: false,
         error: null,
+        showLoginSuccess: true,
       };
 
     case AUTH_ACTIONS.LOGIN_FAILURE:
@@ -189,6 +193,7 @@ const authReducer = (state, action) => {
         isAuthenticated: false,
         isLoading: false,
         error: null,
+        showLoginSuccess: false,
       };
 
     case AUTH_ACTIONS.UPDATE_USER:
@@ -204,6 +209,12 @@ const authReducer = (state, action) => {
         ...state,
         error: null,
       };
+
+    case AUTH_ACTIONS.SET_SHOW_LOGIN_SUCCESS:
+      return { ...state, showLoginSuccess: true };
+
+    case AUTH_ACTIONS.CLEAR_LOGIN_SUCCESS:
+      return { ...state, showLoginSuccess: false };
 
     default:
       return state;
@@ -406,6 +417,10 @@ export const AuthProvider = ({ children }) => {
     return editRights.includes(resolvedId);
   };
 
+  const clearLoginSuccess = () => {
+    dispatch({ type: AUTH_ACTIONS.CLEAR_LOGIN_SUCCESS });
+  };
+
   const value = {
     // State
     user: state.user,
@@ -414,6 +429,7 @@ export const AuthProvider = ({ children }) => {
     isLoading: state.isLoading,
     error: state.error,
     selectedStore: state.user?.selectedStore || null,
+    showLoginSuccess: state.showLoginSuccess,
 
     // Actions
     login,
@@ -424,6 +440,7 @@ export const AuthProvider = ({ children }) => {
     updateSelectedStore,
     refreshUser,
     clearError,
+    clearLoginSuccess,
 
     // Utility functions
     hasScreenAccess,

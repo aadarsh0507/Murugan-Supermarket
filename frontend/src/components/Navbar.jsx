@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Bell, Search, LogOut, Settings, UserCircle, Menu, X } from "lucide-react";
+import { LogOut, Settings, UserCircle, Menu } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -135,38 +135,36 @@ export function Navbar({ onMenuClick }) {
   return (
     <>
       <header className="sticky top-0 z-50 w-full border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/60">
-        <div className="flex h-14 sm:h-16 items-center px-3 sm:px-4 md:px-6 gap-2 sm:gap-4">
-          {/* Mobile menu button */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="lg:hidden touch-target"
-            onClick={onMenuClick}
-            aria-label="Toggle menu"
-          >
-            <Menu className="h-5 w-5" />
-          </Button>
-
-          <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-shrink">
-            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-primary flex items-center justify-center flex-shrink-0">
-              <span className="text-primary-foreground font-bold text-sm sm:text-lg">{storeInitials}</span>
-            </div>
-            <h1 className="text-base sm:text-lg md:text-xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent truncate">
-              {isMobile ? storeName.split(' ')[0] : storeName}
-            </h1>
-          </div>
-
-          <div className="flex-1 max-w-xl mx-auto hidden sm:block">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search products, customers, or orders..."
-                className="pl-9 bg-muted/50 border-none text-sm"
-              />
+        <div className="flex h-14 sm:h-16 items-center justify-between gap-2 px-3 sm:px-4 md:px-6 sm:gap-4">
+          {/* Left: mobile menu + brand */}
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden touch-target h-10 w-10 flex-shrink-0"
+              onClick={onMenuClick}
+              aria-label="Toggle menu"
+            >
+              <Menu className="h-5 w-5" />
+            </Button>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-shrink">
+              <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-gradient-primary flex items-center justify-center flex-shrink-0">
+                <span className="text-primary-foreground font-bold text-sm sm:text-lg">
+                  {storeInitials}
+                </span>
+              </div>
+              <h1
+                className="text-base sm:text-lg md:text-xl font-bold bg-gradient-to-r from-primary to-accent bg-clip-text text-transparent truncate"
+                title={storeName}
+              >
+                {storeName}
+              </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          {/* Right: profile menu flush to the right */}
+          <div className="flex items-center justify-end gap-1 sm:gap-2 flex-shrink-0 min-w-0">
+            <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
@@ -215,6 +213,7 @@ export function Navbar({ onMenuClick }) {
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
+            </div>
           </div>
         </div>
       </header>

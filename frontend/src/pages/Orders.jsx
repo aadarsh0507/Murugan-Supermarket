@@ -29,18 +29,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useAuth } from "@/contexts/AuthContext";
 
 const statusColors = {
   pending: "bg-yellow-100 text-yellow-800 hover:bg-yellow-200",
   confirmed: "bg-blue-100 text-blue-800 hover:bg-blue-200",
   processing: "bg-purple-100 text-purple-800 hover:bg-purple-200",
-  shipped: "bg-indigo-100 text-indigo-800 hover:bg-indigo-200",
+  inprogress: "bg-indigo-100 text-indigo-800 hover:bg-indigo-200",
+  "in-progress": "bg-indigo-100 text-indigo-800 hover:bg-indigo-200",
   delivered: "bg-green-100 text-green-800 hover:bg-green-200",
   cancelled: "bg-red-100 text-red-800 hover:bg-red-200",
 };
 
 const Orders = () => {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const isAdmin = Boolean(user?.isAdmin);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -48,10 +54,45 @@ const Orders = () => {
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showOrderDialog, setShowOrderDialog] = useState(false);
   const [total, setTotal] = useState(0);
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
+  const [deliveryNote, setDeliveryNote] = useState("");
+  const [deliveryCost, setDeliveryCost] = useState("");
+  const [deliveryActive, setDeliveryActive] = useState(true);
+  const [loadingSettings, setLoadingSettings] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
     loadOrders();
   }, [statusFilter]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const loadSettings = async () => {
+      setLoadingSettings(true);
+      try {
+        const response = await ordersAPI.getDeliverySettings();
+        const data = response?.data ?? response;
+        setDeliveryNote(data?.deliveryNote ?? "");
+        setDeliveryCost(
+          data?.deliveryCost === null || data?.deliveryCost === undefined
+            ? ""
+            : String(data.deliveryCost)
+        );
+        setDeliveryActive(
+          data?.isActive === undefined || data?.isActive === null
+            ? true
+            : Boolean(data.isActive)
+        );
+      } catch (error) {
+        // Non-critical; just log and continue
+        console.error("Failed to load delivery settings", error);
+      } finally {
+        setLoadingSettings(false);
+      }
+    };
+    loadSettings();
+  }, [isAdmin]);
 
   const loadOrders = async () => {
     setLoading(true);
@@ -66,13 +107,27 @@ const Orders = () => {
       }
 
       const response = await ordersAPI.getOrders(params);
-      if (response?.success && response?.data) {
-        setOrders(response.data.orders ?? []);
-        setTotal(response.data.pagination?.total ?? 0);
-      } else {
-        setOrders([]);
-        setTotal(0);
+
+      let ordersData = [];
+      let totalRecords = 0;
+
+      if (Array.isArray(response?.data)) {
+        ordersData = response.data;
+      } else if (response?.data?.orders) {
+        ordersData = response.data.orders;
+        totalRecords = response.data.pagination?.total ?? ordersData.length;
+      } else if (response?.data?.data?.orders) {
+        ordersData = response.data.data.orders;
+        totalRecords = response.data.data.pagination?.total ?? ordersData.length;
+      } else if (response?.data) {
+        ordersData = Array.isArray(response.data.data)
+          ? response.data.data
+          : response.data.orders ?? [];
+        totalRecords = response.data.pagination?.total ?? ordersData.length;
       }
+
+      setOrders(ordersData ?? []);
+      setTotal(totalRecords ?? ordersData.length ?? 0);
     } catch (error) {
       setOrders([]);
       setTotal(0);
@@ -91,7 +146,11 @@ const Orders = () => {
   const handleStatusUpdate = async (orderId, newStatus) => {
     try {
       const response = await ordersAPI.updateOrderStatus(orderId, newStatus);
-      if (response.success) {
+      const isOk =
+        response?.success === true ||
+        response?.status === "success" ||
+        response?.status === "ok";
+      if (isOk) {
         toast({
           title: "Success",
           description: "Order status updated successfully",
@@ -109,6 +168,32 @@ const Orders = () => {
   };
 
   const filteredOrders = orders.filter((order) => {
+    const status = (order.status || "").toLowerCase();
+
+    const matchesStatus =
+      statusFilter === "all"
+        ? status !== "delivered" && status !== "cancelled"
+        : status === statusFilter;
+
+    if (!matchesStatus) return false;
+
+    if (fromDate || toDate) {
+      const rawDate = order.orderDate || order.createdAt || order.created_at;
+      if (!rawDate) return false;
+      const orderDt = new Date(rawDate);
+      if (Number.isNaN(orderDt.getTime())) return false;
+
+      if (fromDate) {
+        const from = new Date(`${fromDate}T00:00:00`);
+        if (orderDt < from) return false;
+      }
+
+      if (toDate) {
+        const to = new Date(`${toDate}T23:59:59.999`);
+        if (orderDt > to) return false;
+      }
+    }
+
     if (!searchTerm) return true;
     const search = searchTerm.toLowerCase();
     return (
@@ -138,8 +223,20 @@ const Orders = () => {
   const handleOrderClick = async (order) => {
     try {
       const response = await ordersAPI.getOrder(order.id);
-      if (response.success) {
-        setSelectedOrder(response.data.order);
+      const payload =
+        response?.data?.order ??
+        response?.data?.data?.order ??
+        response?.data?.orderData ??
+        response?.data?.order ??
+        response?.data ??
+        response;
+
+      if (payload) {
+        setSelectedOrder({
+          ...payload,
+          deliveryNote: payload.deliveryNote ?? payload.delivery_note ?? "",
+          isActive: payload.isActive ?? payload.is_active ?? payload.active ?? true,
+        });
         setShowOrderDialog(true);
       }
     } catch (error) {
@@ -149,6 +246,44 @@ const Orders = () => {
         description: getErrorMessage(error, "Failed to load order details", "order details"),
         variant: "destructive",
       });
+    }
+  };
+
+  const handleSaveDeliverySettings = async () => {
+    if (!isAdmin) return;
+    setSavingSettings(true);
+    try {
+      const payload = {
+        deliveryNote,
+        deliveryCost:
+          deliveryCost === "" || deliveryCost === null || deliveryCost === undefined
+            ? null
+            : Number(deliveryCost),
+        isActive: deliveryActive,
+      };
+      const response = await ordersAPI.updateDeliverySettings(payload);
+      const isOk =
+        response?.success === true ||
+        response?.status === "success" ||
+        response?.status === "ok";
+      if (isOk) {
+        toast({
+          title: "Success",
+          description: "Delivery note updated successfully",
+        });
+      }
+    } catch (error) {
+      toast({
+        title: getErrorTitle(error),
+        description: getErrorMessage(
+          error,
+          "Failed to update delivery note",
+          "delivery note"
+        ),
+        variant: "destructive",
+      });
+    } finally {
+      setSavingSettings(false);
     }
   };
 
@@ -170,6 +305,55 @@ const Orders = () => {
         </Button>
       </div>
 
+      {isAdmin && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-lg">Delivery settings for mobile app</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="space-y-1">
+              <span className="text-sm font-medium">Common delivery note</span>
+              <Textarea
+                rows={2}
+                placeholder="This note will be shown for all deliveries in the mobile app."
+                value={deliveryNote}
+                onChange={(e) => setDeliveryNote(e.target.value)}
+                disabled={loadingSettings}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-4">
+              <div className="flex items-center gap-2">
+                <Checkbox
+                  checked={deliveryActive}
+                  onCheckedChange={(value) => setDeliveryActive(Boolean(value))}
+                  disabled={loadingSettings}
+                />
+                <span className="text-sm">Show delivery note in mobile app</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">Default delivery cost</span>
+                <Input
+                  type="number"
+                  className="w-24"
+                  value={deliveryCost}
+                  onChange={(e) => setDeliveryCost(e.target.value)}
+                  disabled={loadingSettings}
+                />
+              </div>
+              <div className="ml-auto">
+                <Button
+                  size="sm"
+                  onClick={handleSaveDeliverySettings}
+                  disabled={savingSettings || loadingSettings}
+                >
+                  {savingSettings ? "Saving..." : "Save settings"}
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
           <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between">
@@ -185,19 +369,33 @@ const Orders = () => {
                 />
               </div>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger className="w-full sm:w-48">
-                  <SelectValue placeholder="Filter by status" />
+                <SelectTrigger className="w-full sm:w-40">
+                  <SelectValue placeholder="Status" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="all">All (hide done)</SelectItem>
                   <SelectItem value="pending">Pending</SelectItem>
                   <SelectItem value="confirmed">Confirmed</SelectItem>
                   <SelectItem value="processing">Processing</SelectItem>
-                  <SelectItem value="shipped">Shipped</SelectItem>
+                  <SelectItem value="inprogress">In Progress</SelectItem>
                   <SelectItem value="delivered">Delivered</SelectItem>
                   <SelectItem value="cancelled">Cancelled</SelectItem>
                 </SelectContent>
               </Select>
+              <Input
+                type="date"
+                value={fromDate}
+                onChange={(e) => setFromDate(e.target.value)}
+                className="w-full sm:w-40"
+                placeholder="From date"
+              />
+              <Input
+                type="date"
+                value={toDate}
+                onChange={(e) => setToDate(e.target.value)}
+                className="w-full sm:w-40"
+                placeholder="To date"
+              />
             </div>
           </div>
         </CardHeader>
@@ -279,7 +477,7 @@ const Orders = () => {
                             <SelectItem value="pending">Pending</SelectItem>
                             <SelectItem value="confirmed">Confirmed</SelectItem>
                             <SelectItem value="processing">Processing</SelectItem>
-                            <SelectItem value="shipped">Shipped</SelectItem>
+                            <SelectItem value="inprogress">In Progress</SelectItem>
                             <SelectItem value="delivered">Delivered</SelectItem>
                             <SelectItem value="cancelled">Cancelled</SelectItem>
                           </SelectContent>
@@ -296,7 +494,7 @@ const Orders = () => {
 
       {/* Order Details Dialog */}
       <Dialog open={showOrderDialog} onOpenChange={setShowOrderDialog}>
-        <DialogContent className="w-[calc(100vw-2rem)] max-w-4xl max-h-[90vh] overflow-y-auto sm:max-w-4xl">
+        <DialogContent className="w-[100vw] max-w-[100vw] h-[100vh] overflow-y-auto sm:w-[100vw] sm:max-w-[100vw] sm:h-[100vh]">
           <DialogHeader>
             <DialogTitle>Order Details - #{selectedOrder?.id}</DialogTitle>
           </DialogHeader>

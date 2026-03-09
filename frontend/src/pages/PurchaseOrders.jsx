@@ -1648,26 +1648,25 @@ const PurchaseOrders = () => {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 min-w-0 overflow-x-hidden">
       {/* Header */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <CardTitle className="text-2xl text-red-600 flex items-center gap-2">
+      <Card className="overflow-hidden">
+        <CardHeader className="px-3 py-4 sm:px-6 sm:py-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
+            <CardTitle className="text-xl sm:text-2xl text-red-600 flex items-center gap-2 min-w-0 truncate">
               PURCHASE
-
             </CardTitle>
-            <div className="flex gap-2">
-              <Button type="submit" form="poForm" variant="default" size="sm" disabled={saving}>
-                <ShoppingCart className="h-4 w-4 mr-1" />
+            <div className="flex flex-wrap gap-2 shrink-0">
+              <Button type="submit" form="poForm" variant="default" size="sm" disabled={saving} className="min-w-0">
+                <ShoppingCart className="h-4 w-4 mr-1 shrink-0" />
                 GENERATE
               </Button>
-              <Button type="button" form="poForm" onClick={handleCredit} variant="outline" size="sm" disabled={saving}>
-                <CreditCard className="h-4 w-4 mr-1" />
+              <Button type="button" form="poForm" onClick={handleCredit} variant="outline" size="sm" disabled={saving} className="min-w-0">
+                <CreditCard className="h-4 w-4 mr-1 shrink-0" />
                 CREDIT
               </Button>
-              <Button type="button" variant="destructive" size="sm" onClick={handleNewPO}>
-                <X className="h-4 w-4 mr-1" />
+              <Button type="button" variant="destructive" size="sm" onClick={handleNewPO} className="min-w-0">
+                <X className="h-4 w-4 mr-1 shrink-0" />
                 CANCEL
               </Button>
             </div>
@@ -1677,15 +1676,15 @@ const PurchaseOrders = () => {
 
       {/* Main Form */}
       <form id="poForm" onSubmit={handleSubmit}>
-        <Card>
-          <CardContent className="pt-6">
+        <Card className="overflow-hidden">
+          <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
             {loadError && (
               <div className="mb-4 text-sm text-destructive">
                 {loadError}
               </div>
             )}
             {/* Minimal fields: Supplier, Store, Purchase Order Date */}
-            <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
               <div>
                 <Label>Supplier Name</Label>
                 <Select
@@ -1790,10 +1789,10 @@ const PurchaseOrders = () => {
 
         {/* Supplier Details Section */}
         {formData.supplierDetails && (
-          <Card>
-            <CardContent className="pt-6">
+          <Card className="overflow-hidden">
+            <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
               <h3 className="font-semibold mb-4 text-blue-600">Supplier Details</h3>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div>
                   <Label className="text-xs text-gray-500">Contact Person</Label>
                   <p className="font-medium">
@@ -1834,35 +1833,35 @@ const PurchaseOrders = () => {
         )}
 
         {/* Summary Section */}
-        <Card>
-          <CardContent className="pt-6">
-            <div className="grid grid-cols-6 gap-4 mb-4">
-              <div className="flex items-center gap-2">
-                <Scale className="h-5 w-5 text-blue-500" />
-                <span className="text-sm">Total Items: <strong>{formData.totalItems}</strong></span>
+        <Card className="overflow-hidden">
+          <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4 mb-4">
+              <div className="flex items-center gap-2 min-w-0">
+                <Scale className="h-5 w-5 text-blue-500 shrink-0" />
+                <span className="text-sm truncate">Total Items: <strong>{formData.totalItems}</strong></span>
               </div>
-              <div className="flex items-center gap-2">
-                <ShoppingCart className="h-5 w-5 text-green-500" />
-                <span className="text-sm">Total Qty: <strong>{formData.totalQty}</strong></span>
+              <div className="flex items-center gap-2 min-w-0">
+                <ShoppingCart className="h-5 w-5 text-green-500 shrink-0" />
+                <span className="text-sm truncate">Total Qty: <strong>{formData.totalQty}</strong></span>
               </div>
-              <div className="flex items-center gap-2">
-                <Tag className="h-5 w-5 text-purple-500" />
-                <span className="text-sm">Price: <strong>₹{Math.round(formData.price)}</strong></span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Tag className="h-5 w-5 text-purple-500 shrink-0" />
+                <span className="text-sm truncate">Price: <strong>₹{Math.round(formData.price)}</strong></span>
               </div>
-              <div className="flex items-center gap-2">
-                <Percent className="h-5 w-5 text-orange-500" />
-                <span className="text-sm">Discount: <strong>₹{Math.round(formData.discount)}</strong></span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Percent className="h-5 w-5 text-orange-500 shrink-0" />
+                <span className="text-sm truncate">Discount: <strong>₹{Math.round(formData.discount)}</strong></span>
               </div>
-              <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-red-500" />
-                <span className="text-sm">Total Tax: <strong>₹{Math.round(formData.totalTax)}</strong></span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Receipt className="h-5 w-5 text-red-500 shrink-0" />
+                <span className="text-sm truncate">Total Tax: <strong>₹{Math.round(formData.totalTax)}</strong></span>
               </div>
-              <div className="flex items-center gap-2">
-                <Receipt className="h-5 w-5 text-blue-600" />
-                <span className="text-sm">Total Amount: <strong>₹{Math.round(formData.totalAmount)}</strong></span>
+              <div className="flex items-center gap-2 min-w-0">
+                <Receipt className="h-5 w-5 text-blue-600 shrink-0" />
+                <span className="text-sm truncate">Total Amount: <strong>₹{Math.round(formData.totalAmount)}</strong></span>
               </div>
             </div>
-            <div className="grid grid-cols-3 gap-4 pt-4 border-t">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t">
               <div>
                 <Label>Partial Payment (Optional)</Label>
                 <div className="relative">
@@ -1903,17 +1902,17 @@ const PurchaseOrders = () => {
 
         {/* Items Table */}
         <Card className="overflow-visible">
-          <CardContent className="pt-6 overflow-visible">
-            <div className="flex justify-between items-center mb-4">
-              <div className="flex items-center gap-3">
-                <h3 className="font-semibold">Line Items</h3>
+          <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6 overflow-visible">
+            <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-center mb-4 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
+                <h3 className="font-semibold truncate">Line Items</h3>
                 {itemsLoading && (
-                  <Badge variant="secondary" className="text-xs">
+                  <Badge variant="secondary" className="text-xs shrink-0">
                     Loading items...
                   </Badge>
                 )}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center min-w-0">
                 <Input
                   placeholder="Scan barcode to add item..."
                   value={barcodeScannerValue}
@@ -1929,10 +1928,10 @@ const PurchaseOrders = () => {
                       await handleBarcodeScan(value);
                     }
                   }}
-                  className="w-64"
+                  className="w-full min-w-0 sm:w-64 pl-3"
                   autoFocus
                 />
-                <Button type="button" onClick={addItem} variant="outline" size="sm">
+                <Button type="button" onClick={addItem} variant="outline" size="sm" className="w-full sm:w-auto shrink-0">
                   <Plus className="h-4 w-4 mr-1" />
                   Manual Add
                 </Button>

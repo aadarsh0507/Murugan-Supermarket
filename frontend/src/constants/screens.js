@@ -26,6 +26,7 @@ export const SCREEN_GROUPS = [
         description: "Sales flow, purchase orders, and credit tracking",
         screens: [
             { id: 7, key: "purchase-orders", label: "Purchase Orders", path: "/purchase-orders" },
+            { id: 7, key: "orders", label: "Orders", path: "/orders" },
             { id: 8, key: "credits", label: "Credits", path: "/credits" },
         ],
     },
@@ -48,6 +49,7 @@ export const SCREEN_ORDER = [
     "suppliers",
     "stores",
     "purchase-orders",
+    "orders",
     "credits",
     "users",
     "user-rights",
