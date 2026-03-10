@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { ShoppingBag, Search, RefreshCw, Calendar, MapPin, CreditCard, Package, User, Phone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +47,7 @@ const statusColors = {
 const Orders = () => {
   const { toast } = useToast();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const isAdmin = Boolean(user?.isAdmin);
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -299,10 +301,25 @@ const Orders = () => {
             Manage orders from mobile app
           </p>
         </div>
-        <Button onClick={loadOrders} variant="outline" disabled={loading} className="touch-target-y min-h-11 w-full sm:w-auto">
-          <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Button
+            onClick={() => navigate("/reports?tab=orders")}
+            variant="outline"
+            className="touch-target-y min-h-11 w-full sm:w-auto"
+          >
+            <ShoppingBag className="h-4 w-4 mr-2" />
+            Order Reports
+          </Button>
+          <Button
+            onClick={loadOrders}
+            variant="outline"
+            disabled={loading}
+            className="touch-target-y min-h-11 w-full sm:w-auto"
+          >
+            <RefreshCw className={`h-4 w-4 mr-2 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       {isAdmin && (

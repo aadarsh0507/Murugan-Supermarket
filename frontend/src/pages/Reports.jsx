@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
-import { useNavigate } from "react-router-dom";
-import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Search, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Search, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard, ShoppingBag } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -25,7 +25,7 @@ import {
 import { MetricCard } from "@/components/MetricCard";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from "recharts";
 import { useToast } from "@/hooks/use-toast";
-import { billsAPI, usersAPI, purchaseOrdersAPI, suppliersAPI, itemsAPI, categoriesAPI, creditsAPI, customerCreditsAPI } from "@/services/api";
+import { billsAPI, usersAPI, purchaseOrdersAPI, suppliersAPI, itemsAPI, categoriesAPI, creditsAPI, customerCreditsAPI, ordersAPI } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { getErrorMessage, getErrorTitle } from "@/utils/errorMessages";
 
@@ -39,10 +39,21 @@ const formatUserDisplayName = (userItem) => {
   return fullName || userItem.fullName?.trim() || userItem.email || "Unnamed User";
 };
 
+const ORDERS_STATUS_COLORS = {
+  pending: "bg-yellow-100 text-yellow-800 hover:bg-yellow-200",
+  confirmed: "bg-blue-100 text-blue-800 hover:bg-blue-200",
+  processing: "bg-purple-100 text-purple-800 hover:bg-purple-200",
+  inprogress: "bg-indigo-100 text-indigo-800 hover:bg-indigo-200",
+  "in-progress": "bg-indigo-100 text-indigo-800 hover:bg-indigo-200",
+  delivered: "bg-green-100 text-green-800 hover:bg-green-200",
+  cancelled: "bg-red-100 text-red-800 hover:bg-red-200",
+};
+
 export default function Reports() {
   const { toast } = useToast();
   const { hasScreenAccess, user, selectedStore } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [reportType, setReportType] = useState("monthly");
@@ -83,14 +94,27 @@ export default function Reports() {
   const [creditViewMode, setCreditViewMode] = useState("summary"); // "summary" or "detailed"
   const [creditTypeFilter, setCreditTypeFilter] = useState("po"); // "po" or "billing"
 
+  // Mobile Orders (Orders) Report States
+  const [mobileOrders, setMobileOrders] = useState([]);
+  const [ordersReportLoading, setOrdersReportLoading] = useState(false);
+  const [ordersStatusFilter, setOrdersStatusFilter] = useState("all");
+
   const canFilterByUser = hasScreenAccess('user-rights') || hasScreenAccess('users');
   const restrictToOwnData = !canFilterByUser;
 
   useEffect(() => {
+    // Optional deep-link: ?tab=orders
+    const tabParam = searchParams.get("tab");
+    const fromOrdersLink = tabParam === "orders";
+    if (fromOrdersLink) {
+      setActiveTab("orders");
+      setSearchParams({}, { replace: true });
+    }
+
     // Restore persisted filters
     try {
       const saved = JSON.parse(localStorage.getItem('reports_filters') || '{}');
-      if (saved.activeTab) setActiveTab(saved.activeTab);
+      if (saved.activeTab && !fromOrdersLink) setActiveTab(saved.activeTab);
       if (saved.reportType) setReportType(saved.reportType);
       if (saved.poReportType) setPoReportType(saved.poReportType);
       if (saved.poViewMode) setPoViewMode(saved.poViewMode);
@@ -105,6 +129,7 @@ export default function Reports() {
       if (saved.creditStatusFilter) setCreditStatusFilter(saved.creditStatusFilter);
       if (saved.creditViewMode) setCreditViewMode(saved.creditViewMode);
       if (saved.creditTypeFilter) setCreditTypeFilter(saved.creditTypeFilter);
+      if (saved.ordersStatusFilter) setOrdersStatusFilter(saved.ordersStatusFilter);
     } catch { }
 
     loadUsers();
@@ -117,6 +142,9 @@ export default function Reports() {
     }
     if (activeTab === "credits") {
       loadCreditReportData();
+    }
+    if (activeTab === "orders" || fromOrdersLink) {
+      loadOrdersReportData();
     }
   }, []);
 
@@ -138,9 +166,10 @@ export default function Reports() {
       creditStatusFilter,
       creditViewMode,
       creditTypeFilter,
+      ordersStatusFilter,
     };
     localStorage.setItem('reports_filters', JSON.stringify(toSave));
-  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter]);
+  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter]);
 
   // Get store ID for dependency tracking - this ensures the effect runs when store changes
   const storeIdForEffect = selectedStore?._id || selectedStore?.id || null;
@@ -175,7 +204,10 @@ export default function Reports() {
     if (activeTab === "credits") {
       loadCreditReportData();
     }
-  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab]);
+    if (activeTab === "orders") {
+      loadOrdersReportData();
+    }
+  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter]);
 
   const loadUsers = async () => {
     try {
@@ -266,6 +298,30 @@ export default function Reports() {
       setCreditLoading(false);
     }
   };
+
+  const loadOrdersReportData = useCallback(async () => {
+    setOrdersReportLoading(true);
+    try {
+      const response = await ordersAPI.getOrders({ limit: 1000, offset: 0 });
+      let ordersData = [];
+      if (Array.isArray(response?.data)) ordersData = response.data;
+      else if (response?.data?.orders) ordersData = response.data.orders;
+      else if (response?.data?.data?.orders) ordersData = response.data.data.orders;
+      else if (response?.data) {
+        ordersData = Array.isArray(response.data.data) ? response.data.data : response.data.orders ?? [];
+      } else if (Array.isArray(response)) ordersData = response;
+      setMobileOrders(ordersData ?? []);
+    } catch (error) {
+      setMobileOrders([]);
+      toast({
+        title: getErrorTitle(error),
+        description: getErrorMessage(error, "Failed to load orders report", "orders"),
+        variant: "destructive",
+      });
+    } finally {
+      setOrdersReportLoading(false);
+    }
+  }, [toast]);
 
   const processCreditReportData = (creditsData, type = "po") => {
     if (!creditsData || creditsData.length === 0) {
@@ -893,6 +949,42 @@ export default function Reports() {
     return `₹${num.toFixed(2)}`;
   };
 
+  const filteredMobileOrders = useMemo(() => {
+    return mobileOrders.filter((order) => {
+      const status = (order.status || "").toLowerCase();
+      if (ordersStatusFilter !== "all" && status !== ordersStatusFilter) return false;
+      const rawDate = order.orderDate || order.createdAt || order.created_at;
+      if (dateFrom && rawDate) {
+        const orderDt = new Date(rawDate);
+        if (!Number.isNaN(orderDt.getTime())) {
+          const from = new Date(`${dateFrom}T00:00:00`);
+          if (orderDt < from) return false;
+        }
+      }
+      if (dateTo && rawDate) {
+        const orderDt = new Date(rawDate);
+        if (!Number.isNaN(orderDt.getTime())) {
+          const to = new Date(`${dateTo}T23:59:59.999`);
+          if (orderDt > to) return false;
+        }
+      }
+      return true;
+    });
+  }, [mobileOrders, dateFrom, dateTo, ordersStatusFilter]);
+
+  const ordersReportMetrics = useMemo(() => {
+    let totalAmount = 0, deliveredAmount = 0, pendingCount = 0, deliveredCount = 0, cancelledCount = 0;
+    filteredMobileOrders.forEach((order) => {
+      const total = Number(order.total) || 0;
+      totalAmount += total;
+      const status = (order.status || "").toLowerCase();
+      if (status === "delivered") { deliveredAmount += total; deliveredCount += 1; }
+      else if (status === "pending") pendingCount += 1;
+      else if (status === "cancelled") cancelledCount += 1;
+    });
+    return { totalOrders: filteredMobileOrders.length, totalAmount, deliveredAmount, pendingCount, deliveredCount, cancelledCount };
+  }, [filteredMobileOrders]);
+
   const summarizeAmountHistory = (credit) => {
     if (!credit) return "No data";
     const initialAmount = (() => {
@@ -1317,7 +1409,7 @@ export default function Reports() {
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex space-x-1 bg-muted p-1 rounded-lg w-fit"
+        className="flex flex-wrap gap-1 bg-muted p-1 rounded-lg w-full sm:w-fit"
       >
         <Button
           variant={activeTab === "sales" ? "default" : "ghost"}
@@ -1350,9 +1442,20 @@ export default function Reports() {
           <CreditCard className="h-4 w-4" />
           Credit Collection
         </Button>
+        <Button
+          variant={activeTab === "orders" ? "default" : "ghost"}
+          onClick={() => {
+            setActiveTab("orders");
+            loadOrdersReportData();
+          }}
+          className="flex items-center gap-2"
+        >
+          <ShoppingBag className="h-4 w-4" />
+          Orders (Mobile)
+        </Button>
       </motion.div>
 
-      {(activeTab === "sales" || activeTab === "purchase" || activeTab === "credits") && (
+      {(activeTab === "sales" || activeTab === "purchase" || activeTab === "credits" || activeTab === "orders") && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1361,11 +1464,11 @@ export default function Reports() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Calendar className="h-5 w-5" />
-                {activeTab === "sales" ? "Sales Report Filters" : activeTab === "purchase" ? "Purchase Order Filters" : "Credit Collection Filters"}
+                {activeTab === "sales" ? "Sales Report Filters" : activeTab === "purchase" ? "Purchase Order Filters" : activeTab === "credits" ? "Credit Collection Filters" : "Order Report Filters"}
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className={`grid gap-4 ${activeTab === "sales" ? "md:grid-cols-4" : activeTab === "purchase" ? "md:grid-cols-6" : "md:grid-cols-6"}`}>
+              <div className={`grid gap-4 ${activeTab === "sales" ? "md:grid-cols-4" : activeTab === "purchase" ? "md:grid-cols-6" : activeTab === "orders" ? "md:grid-cols-4" : "md:grid-cols-6"}`}>
                 {activeTab === "sales" ? (
                   <>
                     <div className="space-y-2">
@@ -1659,6 +1762,44 @@ export default function Reports() {
                           Excel
                         </Button>
                       </div>
+                    </div>
+                  </>
+                ) : activeTab === "orders" ? (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="ordersDateFrom">From Date</Label>
+                      <Input
+                        id="ordersDateFrom"
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ordersDateTo">To Date</Label>
+                      <Input
+                        id="ordersDateTo"
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ordersStatus">Status</Label>
+                      <Select value={ordersStatusFilter} onValueChange={setOrdersStatusFilter}>
+                        <SelectTrigger id="ordersStatus">
+                          <SelectValue placeholder="All statuses" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="confirmed">Confirmed</SelectItem>
+                          <SelectItem value="processing">Processing</SelectItem>
+                          <SelectItem value="inprogress">In Progress</SelectItem>
+                          <SelectItem value="delivered">Delivered</SelectItem>
+                          <SelectItem value="cancelled">Cancelled</SelectItem>
+                        </SelectContent>
+                      </Select>
                     </div>
                   </>
                 ) : null}
@@ -2478,6 +2619,13 @@ export default function Reports() {
         </div>
       )}
 
+      {ordersReportLoading && activeTab === "orders" && (
+        <div className="text-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+          <p className="text-gray-600 mt-2">Loading orders data...</p>
+        </div>
+      )}
+
       {!loading && activeTab === "sales" && (!reportData || reportData.tableData.length === 0) && (
         <div className="text-center py-12">
           <BarChart3 className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
@@ -2492,6 +2640,76 @@ export default function Reports() {
           <h3 className="text-lg font-semibold mb-2">No purchase order data available</h3>
           <p className="text-muted-foreground">Try adjusting your filters to see data</p>
         </div>
+      )}
+
+      {!ordersReportLoading && activeTab === "orders" && filteredMobileOrders.length === 0 && (
+        <div className="text-center py-12">
+          <ShoppingBag className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+          <h3 className="text-lg font-semibold mb-2">No orders found</h3>
+          <p className="text-muted-foreground">Try adjusting date range or status filter</p>
+        </div>
+      )}
+
+      {/* Orders (Mobile) Report */}
+      {activeTab === "orders" && !ordersReportLoading && filteredMobileOrders.length > 0 && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-3 sm:gap-4 items-stretch">
+            <MetricCard title="Total Orders" value={ordersReportMetrics.totalOrders} icon={ShoppingBag} delay={0.1} />
+            <MetricCard title="Total Order Value" value={formatCurrencyValue(ordersReportMetrics.totalAmount)} icon={DollarSign} delay={0.2} />
+            <MetricCard title="Delivered Orders" value={ordersReportMetrics.deliveredCount} icon={CheckCircle} delay={0.3} />
+            <MetricCard title="Delivered Value" value={formatCurrencyValue(ordersReportMetrics.deliveredAmount)} icon={TrendingUp} delay={0.4} />
+            <MetricCard title="Pending Orders" value={ordersReportMetrics.pendingCount} icon={Clock} delay={0.5} />
+            <MetricCard title="Cancelled Orders" value={ordersReportMetrics.cancelledCount} icon={XCircle} delay={0.6} />
+          </div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ShoppingBag className="h-5 w-5" />
+                  Orders breakdown ({filteredMobileOrders.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Order ID</TableHead>
+                        <TableHead>Customer</TableHead>
+                        <TableHead>Phone</TableHead>
+                        <TableHead>Order Date</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Subtotal</TableHead>
+                        <TableHead className="text-right">GST</TableHead>
+                        <TableHead className="text-right">Delivery</TableHead>
+                        <TableHead className="text-right">Total</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMobileOrders.map((order) => (
+                        <TableRow key={order.id}>
+                          <TableCell className="font-medium">{order.id}</TableCell>
+                          <TableCell>{order.customerName || `User ${order.userId}` || "-"}</TableCell>
+                          <TableCell>{order.customerPhone || "-"}</TableCell>
+                          <TableCell>{formatDateValue(order.orderDate || order.createdAt, true)}</TableCell>
+                          <TableCell>
+                            <Badge className={ORDERS_STATUS_COLORS[order.status] || "bg-gray-100 text-gray-800"}>
+                              {order.status || "pending"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right">{formatCurrencyValue(order.subtotal)}</TableCell>
+                          <TableCell className="text-right">{formatCurrencyValue(order.gst)}</TableCell>
+                          <TableCell className="text-right">{formatCurrencyValue(order.delivery)}</TableCell>
+                          <TableCell className="text-right font-semibold">{formatCurrencyValue(order.total)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        </>
       )}
 
       {/* Credit Collection Report */}

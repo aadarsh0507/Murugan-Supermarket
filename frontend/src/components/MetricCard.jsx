@@ -17,12 +17,12 @@ export function MetricCard({
     >
       <Card className="hover:shadow-lg transition-shadow duration-300 h-full">
         <CardContent className="p-4 sm:p-6 h-full">
-          <div className="flex h-full items-center justify-between gap-3">
-            <div className="space-y-1 min-w-0 flex-1">
-              <p className="text-xs sm:text-sm font-medium text-muted-foreground truncate">
+          <div className="flex h-full items-center justify-between gap-3 min-h-[4.5rem]">
+            <div className="space-y-1 min-w-0 flex-1 flex flex-col justify-center">
+              <p className="text-xs sm:text-sm font-medium text-muted-foreground line-clamp-2 break-words">
                 {title}
               </p>
-              <p className="text-xl sm:text-2xl md:text-3xl font-bold whitespace-nowrap">
+              <p className="text-xl sm:text-2xl md:text-3xl font-bold truncate" title={typeof value === "string" ? value : String(value)}>
                 {value}
               </p>
               {trend && (
