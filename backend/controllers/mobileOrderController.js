@@ -55,6 +55,13 @@ const normalizeMobileOrderRow = (row = {}) => {
     }
   }
 
+  const returnStatus =
+    getFirstFromRow(row, ['return_status', 'returnStatus']) || null;
+  const returnReason =
+    getFirstFromRow(row, ['return_reason', 'returnReason']) || null;
+  const returnImageUrl =
+    getFirstFromRow(row, ['return_image_url', 'returnImageUrl']) || null;
+
   return {
     id,
     userId,
@@ -70,6 +77,9 @@ const normalizeMobileOrderRow = (row = {}) => {
     updatedAt,
     deliveryNote,
     isActive,
+    returnStatus: returnStatus ? String(returnStatus).trim() : null,
+    returnReason: returnReason ? String(returnReason).trim() : null,
+    returnImageUrl: returnImageUrl ? String(returnImageUrl).trim() : null,
   };
 };
 
@@ -513,6 +523,117 @@ export const updateDeliverySettings = async (req, res) => {
     res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to update delivery settings.',
+    });
+  }
+};
+
+const normalizeOrderReturnRow = (row = {}) => {
+  if (!row || typeof row !== 'object') return {};
+  return {
+    id: getFirstFromRow(row, ['id']),
+    orderId: getFirstFromRow(row, ['orderId', 'order_id']),
+    userId: getFirstFromRow(row, ['userId', 'user_id']),
+    reason: getFirstFromRow(row, ['reason']) || null,
+    imageUrl: getFirstFromRow(row, ['imageUrl', 'image_url']) || null,
+    status: (getFirstFromRow(row, ['status']) || 'pending').toString().toLowerCase(),
+    createdAt: getFirstFromRow(row, ['createdAt', 'created_at']) || null,
+    updatedAt: getFirstFromRow(row, ['updatedAt', 'updated_at']) || null,
+  };
+};
+
+export const listOrderReturns = async (req, res) => {
+  try {
+    if (!isMobileAppDbConfigured()) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Mobile app database is not configured.',
+      });
+    }
+
+    const orderId = req.query.orderId || req.query.order_id || null;
+
+    let sql = 'SELECT * FROM order_returns';
+    const params = [];
+    if (orderId) {
+      sql += ' WHERE orderId = ?';
+      params.push(orderId);
+    }
+    sql += ' ORDER BY createdAt DESC, id DESC';
+
+    const rows = await queryMobileApp(sql, params);
+    const data = Array.isArray(rows) ? rows.map(normalizeOrderReturnRow) : [];
+
+    res.json({
+      status: 'success',
+      data,
+    });
+  } catch (error) {
+    console.error('List order returns error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to load return requests.',
+    });
+  }
+};
+
+export const submitOrderReturn = async (req, res) => {
+  try {
+    if (!isMobileAppDbConfigured()) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Mobile app database is not configured.',
+      });
+    }
+
+    const orderId = req.params.id;
+    const returnReason =
+      typeof req.body?.returnReason === 'string'
+        ? req.body.returnReason.trim()
+        : typeof req.body?.return_reason === 'string'
+          ? req.body.return_reason.trim()
+          : '';
+
+    if (!orderId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Order ID is required.',
+      });
+    }
+
+    let returnImageUrl = null;
+    if (req.file && req.file.filename) {
+      returnImageUrl = `/uploads/returns/${req.file.filename}`.replace(/\\/g, '/');
+    }
+
+    const result = await queryMobileApp(
+      'UPDATE orders SET return_status = ?, return_reason = ?, return_image_url = ? WHERE id = ?',
+      ['returned', returnReason || null, returnImageUrl, orderId]
+    );
+
+    const affectedRows =
+      typeof result?.affectedRows === 'number'
+        ? result.affectedRows
+        : Array.isArray(result) && result[0]?.affectedRows !== undefined
+          ? result[0].affectedRows
+          : null;
+
+    if (affectedRows === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Order not found.',
+      });
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Return recorded successfully.',
+      data: { returnStatus: 'returned', returnReason: returnReason || null, returnImageUrl },
+    });
+  } catch (error) {
+    console.error('Submit order return error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to record return.',
     });
   }
 };

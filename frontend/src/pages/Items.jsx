@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { itemsAPI, categoriesAPI, brandsAPI, purchaseOrdersAPI } from "@/services/api";
 import { useDebounce } from "@/hooks/useDebounce";
-import { useSearchParams } from "react-router-dom";
+import { useSearchParams, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import BarcodeLabel from "@/components/BarcodeLabel";
 import { useAuth } from "@/contexts/AuthContext";
@@ -39,6 +39,7 @@ const STOCK_STATUS_OPTIONS = [
 export default function Items() {
   const { toast } = useToast();
   const { selectedStore, hasEditRight } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [items, setItems] = useState([]);
@@ -2784,6 +2785,24 @@ export default function Items() {
           <p className="text-muted-foreground text-sm md:text-base">
             {headerDescription}
           </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/categories")}
+            >
+              Categories
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/subcategories")}
+            >
+              Subcategories
+            </Button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="flex flex-wrap items-center gap-2">

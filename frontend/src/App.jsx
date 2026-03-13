@@ -21,6 +21,7 @@ import SelectStore from "./pages/SelectStore";
 import PurchaseOrders from "./pages/PurchaseOrders";
 import Orders from "./pages/Orders";
 import Credits from "./pages/Credits";
+import Subcategories from "./pages/Subcategories";
 import NotFound from "./pages/NotFound";
 import Billing from "./pages/Billing";
 import UserRights from "./pages/UserRights";
@@ -92,8 +93,16 @@ const App = () => (
             <Route
               path="/categories"
               element={
-                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["items"]}>
+                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["categories"]}>
                   <Layout><Categories /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/subcategories"
+              element={
+                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["subcategories"]}>
+                  <Layout><Subcategories /></Layout>
                 </ProtectedRoute>
               }
             />

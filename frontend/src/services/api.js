@@ -332,6 +332,29 @@ export const categoriesAPI = {
     });
   },
 
+  // Update existing subcategory (by SubCategoryCode)
+  // subcategoryCode: underlying `SubCategoryCode` value (usually numeric or code string)
+  // data: { name?, parent_id?, store_id?, isActive? }
+  updateSubcategory: async (subcategoryCode, data) => {
+    if (!subcategoryCode) {
+      throw new Error('Subcategory code is required');
+    }
+    return await apiRequest(`/categories/subcategories/${encodeURIComponent(subcategoryCode)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  },
+
+  // Delete subcategory (by SubCategoryCode)
+  deleteSubcategory: async (subcategoryCode) => {
+    if (!subcategoryCode) {
+      throw new Error('Subcategory code is required');
+    }
+    return await apiRequest(`/categories/subcategories/${encodeURIComponent(subcategoryCode)}`, {
+      method: 'DELETE',
+    });
+  },
+
   // Add item to subcategory (now uses items endpoint directly)
   // Note: itemData should include categoryId and subcategoryId
   addItemToSubcategory: async (categoryId, subcategoryId, itemData) => {
@@ -503,6 +526,32 @@ export const billsAPI = {
     });
   },
 
+  // Razorpay (UPI) – get public key for checkout
+  getRazorpayKey: async () => {
+    const res = await apiRequest('/bills/razorpay/key');
+    return res?.keyId ?? import.meta.env?.VITE_RAZORPAY_KEY_ID ?? null;
+  },
+
+  // Razorpay – create order (amount in rupees)
+  createRazorpayOrder: async (amountInRupees, receipt) => {
+    return await apiRequest('/bills/razorpay/create-order', {
+      method: 'POST',
+      body: JSON.stringify({ amount: amountInRupees, receipt: receipt || undefined }),
+    });
+  },
+
+  // Razorpay – verify payment after success
+  verifyRazorpayPayment: async (razorpay_order_id, razorpay_payment_id, razorpay_signature) => {
+    return await apiRequest('/bills/razorpay/verify', {
+      method: 'POST',
+      body: JSON.stringify({
+        razorpay_order_id,
+        razorpay_payment_id,
+        razorpay_signature,
+      }),
+    });
+  },
+
   // Get all bills
   getBills: async (params = {}) => {
     const queryString = new URLSearchParams(params).toString();
@@ -608,6 +657,30 @@ export const ordersAPI = {
     return await apiRequest('/mobile-orders/settings', {
       method: 'PUT',
       body: JSON.stringify(settings),
+    });
+  },
+
+  // Get return requests from mobile app (order_returns table). Optional: { orderId } to filter by order.
+  getReturnRequests: async (params = {}) => {
+    const queryString = new URLSearchParams();
+    if (params.orderId != null) queryString.set('orderId', params.orderId);
+    const qs = queryString.toString();
+    const endpoint = qs ? `/mobile-orders/returns?${qs}` : '/mobile-orders/returns';
+    return await apiRequest(endpoint);
+  },
+
+  // Submit order return (reason + optional image). Pass FormData with returnReason and optional 'image' file.
+  submitOrderReturn: async (orderId, formData) => {
+    if (!orderId) throw new Error('Order ID is required');
+    if (!(formData instanceof FormData)) {
+      const fd = new FormData();
+      if (formData?.returnReason != null) fd.append('returnReason', formData.returnReason);
+      if (formData?.image instanceof File) fd.append('image', formData.image);
+      formData = fd;
+    }
+    return await apiRequest(`/mobile-orders/${orderId}/return`, {
+      method: 'PATCH',
+      body: formData,
     });
   },
 };

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { ShoppingBag, Search, RefreshCw, Calendar, MapPin, CreditCard, Package, User, Phone } from "lucide-react";
+import { ShoppingBag, Search, RefreshCw, Calendar, MapPin, CreditCard, Package, User, Phone, RotateCcw, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +44,18 @@ const statusColors = {
   cancelled: "bg-red-100 text-red-800 hover:bg-red-200",
 };
 
+const hasReturn = (order) => {
+  const status = order?.returnStatus ?? order?.return_status;
+  return Boolean(status && String(status).trim());
+};
+
+const getReturnImageSrc = (imageUrl) => {
+  if (!imageUrl || typeof imageUrl !== "string") return null;
+  const base = import.meta.env?.VITE_BACKEND_URL ?? "";
+  const uploadsBase = base ? base.replace(/\/api\/?$/, "") : "";
+  return imageUrl.startsWith("http") ? imageUrl : `${uploadsBase}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
+};
+
 const Orders = () => {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -63,10 +75,63 @@ const Orders = () => {
   const [deliveryActive, setDeliveryActive] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  const [returnReason, setReturnReason] = useState("");
+  const [returnImageFile, setReturnImageFile] = useState(null);
+  const [submittingReturn, setSubmittingReturn] = useState(false);
+  const [showReturnRequestsDialog, setShowReturnRequestsDialog] = useState(false);
+  const [returnRequestsList, setReturnRequestsList] = useState([]);
+  const [loadingReturnRequests, setLoadingReturnRequests] = useState(false);
+  const [selectedOrderReturnRequests, setSelectedOrderReturnRequests] = useState([]);
 
   useEffect(() => {
     loadOrders();
   }, [statusFilter]);
+
+  useEffect(() => {
+    if (!showReturnRequestsDialog) return;
+    let cancelled = false;
+    setLoadingReturnRequests(true);
+    setReturnRequestsList([]);
+    ordersAPI
+      .getReturnRequests()
+      .then((res) => {
+        if (cancelled) return;
+        const data = res?.data ?? res ?? [];
+        setReturnRequestsList(Array.isArray(data) ? data : []);
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          toast({
+            title: getErrorTitle(err),
+            description: getErrorMessage(err, "Failed to load return requests", "return requests"),
+            variant: "destructive",
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReturnRequests(false);
+      });
+    return () => { cancelled = true; };
+  }, [showReturnRequestsDialog, toast]);
+
+  useEffect(() => {
+    if (!selectedOrder?.id) {
+      setSelectedOrderReturnRequests([]);
+      return;
+    }
+    let cancelled = false;
+    ordersAPI
+      .getReturnRequests({ orderId: selectedOrder.id })
+      .then((res) => {
+        if (cancelled) return;
+        const data = res?.data ?? res ?? [];
+        setSelectedOrderReturnRequests(Array.isArray(data) ? data : []);
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedOrderReturnRequests([]);
+      });
+    return () => { cancelled = true; };
+  }, [selectedOrder?.id]);
 
   useEffect(() => {
     if (!isAdmin) return;
@@ -239,6 +304,8 @@ const Orders = () => {
           deliveryNote: payload.deliveryNote ?? payload.delivery_note ?? "",
           isActive: payload.isActive ?? payload.is_active ?? payload.active ?? true,
         });
+        setReturnReason("");
+        setReturnImageFile(null);
         setShowOrderDialog(true);
       }
     } catch (error) {
@@ -248,6 +315,42 @@ const Orders = () => {
         description: getErrorMessage(error, "Failed to load order details", "order details"),
         variant: "destructive",
       });
+    }
+  };
+
+  const handleSubmitReturn = async () => {
+    if (!selectedOrder?.id) return;
+    setSubmittingReturn(true);
+    try {
+      const formData = new FormData();
+      if (returnReason.trim()) formData.append("returnReason", returnReason.trim());
+      if (returnImageFile) formData.append("image", returnImageFile);
+      const response = await ordersAPI.submitOrderReturn(selectedOrder.id, formData);
+      const isOk =
+        response?.success === true ||
+        response?.status === "success" ||
+        response?.status === "ok";
+      if (isOk) {
+        toast({ title: "Success", description: "Return recorded successfully." });
+        setReturnReason("");
+        setReturnImageFile(null);
+        const updated = {
+          ...selectedOrder,
+          returnStatus: "returned",
+          returnReason: returnReason.trim() || selectedOrder.returnReason,
+          returnImageUrl: response?.data?.returnImageUrl ?? selectedOrder.returnImageUrl,
+        };
+        setSelectedOrder(updated);
+        loadOrders();
+      }
+    } catch (error) {
+      toast({
+        title: getErrorTitle(error),
+        description: getErrorMessage(error, "Failed to record return", "return"),
+        variant: "destructive",
+      });
+    } finally {
+      setSubmittingReturn(false);
     }
   };
 
@@ -302,6 +405,16 @@ const Orders = () => {
           </p>
         </div>
         <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Button
+            onClick={() => {
+              setShowReturnRequestsDialog(true);
+            }}
+            variant="outline"
+            className="touch-target-y min-h-11 w-full sm:w-auto"
+          >
+            <RotateCcw className="h-4 w-4 mr-2" />
+            Return requests
+          </Button>
           <Button
             onClick={() => navigate("/reports?tab=orders")}
             variant="outline"
@@ -439,6 +552,7 @@ const Orders = () => {
                     <TableHead>Order Date</TableHead>
                     <TableHead>Payment</TableHead>
                     <TableHead>Status</TableHead>
+                    <TableHead>Return</TableHead>
                     <TableHead className="text-right">Subtotal</TableHead>
                     <TableHead className="text-right">GST</TableHead>
                     <TableHead className="text-right">Delivery</TableHead>
@@ -469,6 +583,16 @@ const Orders = () => {
                         >
                           {order.status || "pending"}
                         </Badge>
+                      </TableCell>
+                      <TableCell>
+                        {hasReturn(order) ? (
+                          <Badge variant="secondary" className="bg-amber-100 text-amber-800 gap-1">
+                            <RotateCcw className="h-3 w-3" />
+                            Returned
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground text-sm">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         {formatCurrency(order.subtotal)}
@@ -618,6 +742,132 @@ const Orders = () => {
                 </CardContent>
               </Card>
 
+              {/* Return requests from app + admin return or record return */}
+              <Card>
+                  <CardHeader>
+                    <CardTitle className="text-lg flex items-center gap-2">
+                      <RotateCcw className="h-5 w-5" />
+                      Return requests (from app)
+                      {selectedOrderReturnRequests.length > 0 && (
+                        <Badge variant="secondary" className="ml-1">
+                          {selectedOrderReturnRequests.length}
+                        </Badge>
+                      )}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {selectedOrderReturnRequests.length > 0 ? (
+                      <div className="space-y-4">
+                        {selectedOrderReturnRequests.map((req) => (
+                          <div
+                            key={req.id}
+                            className="rounded-lg border p-3 space-y-2 bg-muted/30"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Badge
+                                className={
+                                  req.status === "pending"
+                                    ? "bg-amber-100 text-amber-800"
+                                    : req.status === "approved"
+                                    ? "bg-green-100 text-green-800"
+                                    : "bg-gray-100 text-gray-800"
+                                }
+                              >
+                                {req.status || "pending"}
+                              </Badge>
+                              <span className="text-xs text-muted-foreground">
+                                {formatDate(req.createdAt)} · User #{req.userId}
+                              </span>
+                            </div>
+                            {req.reason && (
+                              <p className="text-sm">
+                                <span className="font-medium text-muted-foreground">Reason: </span>
+                                {req.reason}
+                              </p>
+                            )}
+                            {req.imageUrl && (
+                              <div>
+                                <span className="text-sm font-medium text-muted-foreground flex items-center gap-1 mb-1">
+                                  <ImageIcon className="h-4 w-4" />
+                                  Attached image
+                                </span>
+                                <div className="rounded-md border bg-background overflow-hidden inline-block max-w-full">
+                                  <img
+                                    src={getReturnImageSrc(req.imageUrl) || req.imageUrl}
+                                    alt="Return"
+                                    className="max-h-48 w-auto object-contain"
+                                  />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        No return requests from the mobile app for this order.
+                      </p>
+                    )}
+                    <div className="border-t pt-4">
+                      <h4 className="text-sm font-medium mb-2">Record return (admin)</h4>
+                      {hasReturn(selectedOrder) ? (
+                        <>
+                          {selectedOrder.returnReason && (
+                            <div>
+                              <span className="text-sm font-medium text-muted-foreground">Reason: </span>
+                              <p className="text-sm mt-1">{selectedOrder.returnReason}</p>
+                            </div>
+                          )}
+                          {(selectedOrder.returnImageUrl || selectedOrder.return_image_url) && (
+                            <div className="mt-2">
+                              <span className="text-sm font-medium text-muted-foreground flex items-center gap-1 mb-2">
+                                <ImageIcon className="h-4 w-4" />
+                                Attached image
+                              </span>
+                              <div className="rounded-md border bg-muted/30 overflow-hidden inline-block max-w-full">
+                                <img
+                                  src={selectedOrder.returnImageUrl || selectedOrder.return_image_url}
+                                  alt="Return attachment"
+                                  className="max-h-64 w-auto object-contain"
+                                />
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      ) : (
+                        <>
+                          <div className="space-y-1">
+                            <label className="text-sm font-medium">Reason (optional)</label>
+                            <Textarea
+                              placeholder="e.g. Defective, wrong item, customer request"
+                              value={returnReason}
+                              onChange={(e) => setReturnReason(e.target.value)}
+                              rows={2}
+                              disabled={submittingReturn}
+                            />
+                          </div>
+                          <div className="space-y-1 mt-2">
+                            <label className="text-sm font-medium">Attach image (optional)</label>
+                            <Input
+                              type="file"
+                              accept="image/*"
+                              onChange={(e) => setReturnImageFile(e.target.files?.[0] ?? null)}
+                              disabled={submittingReturn}
+                            />
+                          </div>
+                          <Button
+                            className="mt-2"
+                            onClick={handleSubmitReturn}
+                            disabled={submittingReturn || (!returnReason.trim() && !returnImageFile)}
+                          >
+                            {submittingReturn ? "Saving..." : "Mark as returned"}
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+
               {/* Order Items */}
               <Card>
                 <CardHeader>
@@ -667,6 +917,94 @@ const Orders = () => {
               </Card>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Return requests (from mobile app) dialog */}
+      <Dialog open={showReturnRequestsDialog} onOpenChange={setShowReturnRequestsDialog}>
+        <DialogContent className="w-[100vw] max-w-[100vw] h-[100vh] sm:h-[100vh] overflow-y-auto flex flex-col p-4 sm:p-6">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <RotateCcw className="h-5 w-5" />
+              Return requests (from mobile app)
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex-1 overflow-auto -mx-2 sm:-mx-6 px-2 sm:px-6">
+            {loadingReturnRequests ? (
+              <div className="flex items-center justify-center py-12">
+                <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-muted-foreground">Loading return requests...</span>
+              </div>
+            ) : returnRequestsList.length === 0 ? (
+              <div className="text-center py-12 text-muted-foreground">
+                No return requests from the mobile app.
+              </div>
+            ) : (
+              <div className="rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Order ID</TableHead>
+                      <TableHead>User ID</TableHead>
+                      <TableHead>Reason</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Created</TableHead>
+                      <TableHead className="w-24">Image</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {returnRequestsList.map((req) => (
+                      <TableRow
+                        key={req.id}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => {
+                          setShowReturnRequestsDialog(false);
+                          handleOrderClick({ id: req.orderId });
+                        }}
+                      >
+                        <TableCell className="font-medium">{req.id}</TableCell>
+                        <TableCell>#{req.orderId}</TableCell>
+                        <TableCell>{req.userId}</TableCell>
+                        <TableCell className="max-w-[200px] truncate" title={req.reason || ""}>
+                          {req.reason || "—"}
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            className={
+                              req.status === "pending"
+                                ? "bg-amber-100 text-amber-800"
+                                : req.status === "approved"
+                                ? "bg-green-100 text-green-800"
+                                : "bg-gray-100 text-gray-800"
+                            }
+                          >
+                            {req.status || "pending"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {formatDate(req.createdAt)}
+                        </TableCell>
+                        <TableCell>
+                          {req.imageUrl ? (
+                            <div className="rounded border overflow-hidden w-12 h-12 flex-shrink-0">
+                              <img
+                                src={getReturnImageSrc(req.imageUrl) || req.imageUrl}
+                                alt=""
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">—</span>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>

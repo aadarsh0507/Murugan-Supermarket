@@ -27,6 +27,19 @@ import { billsAPI, itemsAPI, categoriesAPI } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
 import BillModal from "@/components/BillModal";
 
+// Load Razorpay checkout script once (for UPI payments)
+const loadRazorpayScript = () => {
+  if (typeof window !== "undefined" && window.Razorpay) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = "https://checkout.razorpay.com/v1/checkout.js";
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Failed to load Razorpay"));
+    document.body.appendChild(script);
+  });
+};
+
 const STORAGE_KEY = "billingTabsState.v1";
 const MAX_BILL_TABS = 5;
 const PAYMENT_METHODS = [
@@ -1273,7 +1286,7 @@ export default function Billing() {
 
     updateBill(billId, { isSaving: true, error: null });
 
-    try {
+    const runSaveBill = async (transactionId) => {
       const response = await billsAPI.createBill({
         storeId: selectedStore.id,
         customerName: trimmedCustomerName || undefined,
@@ -1284,7 +1297,7 @@ export default function Billing() {
         customerGstin: (billToSave.customerGstin || "").trim() || undefined,
         paymentMethod: billToSave.paymentMethod,
         paymentStatus,
-        transactionId: trimmedTransactionId || undefined,
+        transactionId: transactionId ?? undefined,
         subtotal: Number(totals.subtotal.toFixed(2)),
         discount: Number(totals.discount.toFixed(2)),
         tax: Number(totals.tax.toFixed(2)),
@@ -1397,6 +1410,46 @@ export default function Billing() {
       } finally {
         closeBillAfterSave(billId);
       }
+    };
+
+    // UPI: pay via Razorpay (your test credentials), then save bill with payment id as transaction ID
+    if (billToSave.paymentMethod === "upi") {
+      try {
+        const orderRes = await billsAPI.createRazorpayOrder(totals.total, `bill_${Date.now()}`);
+        const keyId = orderRes?.keyId ?? import.meta.env?.VITE_RAZORPAY_KEY_ID;
+        const orderId = orderRes?.orderId;
+        if (!keyId || !orderId) throw new Error("Razorpay order failed");
+        await loadRazorpayScript();
+        const storeName = selectedStore?.name ?? "Store";
+        const rzp = new window.Razorpay({
+          key: keyId,
+          order_id: orderId,
+          amount: orderRes.amount,
+          currency: orderRes.currency || "INR",
+          name: storeName,
+          description: "Bill payment",
+          handler: async function (res) {
+            try {
+              await billsAPI.verifyRazorpayPayment(res.razorpay_order_id, res.razorpay_payment_id, res.razorpay_signature);
+              await runSaveBill(res.razorpay_payment_id);
+            } catch (e) {
+              updateBill(billId, { isSaving: false });
+              toast({ title: "Payment failed", description: e?.message ?? "Verification failed", variant: "destructive" });
+            }
+          },
+          modal: { ondismiss: () => updateBill(billId, { isSaving: false }) },
+        });
+        rzp.open();
+      } catch (err) {
+        updateBill(billId, { isSaving: false });
+        toast({ title: "Payment error", description: err?.message ?? "Could not start payment", variant: "destructive" });
+      }
+      setTimeout(() => focusBarcodeInput(), 0);
+      return;
+    }
+
+    try {
+      await runSaveBill(trimmedTransactionId || undefined);
     } catch (error) {
       console.error("Failed to save bill:", error);
       
@@ -2477,7 +2530,7 @@ export default function Billing() {
               </Card>
             )}
 
-            {/* Payment Method */}
+            {/* Payment Method – all terms: Cash, Card, UPI, Credit, Online, Other */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Payment Method</CardTitle>
@@ -2485,14 +2538,35 @@ export default function Billing() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Payment Method</label>
-                  <div className="p-2 bg-muted rounded-md">
-                    <span className="text-sm capitalize">
-                      {PAYMENT_METHODS.find(m => m.value === activeBill?.paymentMethod)?.label || activeBill?.paymentMethod || "—"}
-                    </span>
-                  </div>
+                  <Select
+                    value={activeBill?.paymentMethod ?? "upi"}
+                    onValueChange={(value) => updateBill(activeBillId, { paymentMethod: value, paymentStatus: value === "credit" ? "pending" : "paid", ...(value !== "online" && value !== "upi" ? { transactionId: "" } : {}) })}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select payment method" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {PAYMENT_METHODS.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                
-                {activeBill?.paymentMethod === "online" && activeBill?.transactionId && (
+                {/* Transaction ID: input for Online (manual entry), read-only for UPI (from Razorpay) */}
+                {activeBill?.paymentMethod === "online" && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Transaction ID (required for Online)</label>
+                    <Input
+                      placeholder="Enter transaction ID or reference"
+                      value={activeBill?.transactionId ?? ""}
+                      onChange={(e) => updateBill(activeBillId, { transactionId: e.target.value })}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+                {activeBill?.paymentMethod === "upi" && activeBill?.transactionId && (
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Transaction ID</label>
                     <div className="p-2 bg-muted rounded-md">
@@ -2503,23 +2577,32 @@ export default function Billing() {
               </CardContent>
             </Card>
 
-            {/* Customer Details - At Bottom */}
+            {/* Customer Details – editable (required for Credit) */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Customer Details</CardTitle>
+                {activeBill?.paymentMethod === "credit" && (
+                  <p className="text-xs text-muted-foreground font-normal mt-1">Name and phone are required for credit bills.</p>
+                )}
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Customer Name</label>
-                  <div className="p-2 bg-muted rounded-md">
-                    <span className="text-sm">{activeBill?.customerName || "—"}</span>
-                  </div>
+                  <label className="text-sm font-medium">Customer Name {activeBill?.paymentMethod === "credit" && <span className="text-destructive">*</span>}</label>
+                  <Input
+                    placeholder="Enter customer name"
+                    value={activeBill?.customerName ?? ""}
+                    onChange={(e) => updateBill(activeBillId, { customerName: e.target.value })}
+                    className="w-full"
+                  />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Customer Phone</label>
-                  <div className="p-2 bg-muted rounded-md">
-                    <span className="text-sm">{activeBill?.customerPhone || "—"}</span>
-                  </div>
+                  <label className="text-sm font-medium">Customer Phone {activeBill?.paymentMethod === "credit" && <span className="text-destructive">*</span>}</label>
+                  <Input
+                    placeholder="Enter phone number"
+                    value={activeBill?.customerPhone ?? ""}
+                    onChange={(e) => updateBill(activeBillId, { customerPhone: e.target.value })}
+                    className="w-full"
+                  />
                 </div>
               </CardContent>
             </Card>

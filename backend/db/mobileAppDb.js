@@ -80,6 +80,21 @@ const ensureMobileOrdersSchema = async () => {
     await connection.query(
       'ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1'
     );
+    // Return request columns: status, reason, attached image URL
+    const returnCols = [
+      ['return_status', 'VARCHAR(50) NULL'],
+      ['return_reason', 'TEXT NULL'],
+      ['return_image_url', 'VARCHAR(500) NULL'],
+    ];
+    for (const [col, def] of returnCols) {
+      try {
+        await connection.query(
+          `ALTER TABLE orders ADD COLUMN ${col} ${def}`
+        );
+      } catch (e) {
+        if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+      }
+    }
   } catch (error) {
     console.error('⚠️ Failed to ensure mobile orders schema:', error.message);
   } finally {

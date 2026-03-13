@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { 
   Plus, 
@@ -26,6 +26,8 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/contexts/AuthContext";
+import { useSearchParams } from "react-router-dom";
 import {
   Select,
   SelectContent,
@@ -42,6 +44,8 @@ import {
 import { categoriesAPI, itemsAPI } from "@/services/api";
 
 const Categories = () => {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { selectedStore } = useAuth();
   const [categories, setCategories] = useState([]);
   const [filteredCategories, setFilteredCategories] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -52,6 +56,10 @@ const Categories = () => {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
+
+  // Simple create category modal state
+  const [isCreateCategoryOpen, setIsCreateCategoryOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
 
   // Multi-step modal state
   const [currentStep, setCurrentStep] = useState(1);
@@ -88,7 +96,14 @@ const Categories = () => {
 
   useEffect(() => {
     loadCategories();
-  }, []);
+  }, [selectedStore]);
+
+  // Open create modal from query string (?create=1)
+  useEffect(() => {
+    if (searchParams.get("create") === "1") {
+      setIsCreateCategoryOpen(true);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     filterAndSortCategories();
@@ -97,10 +112,16 @@ const Categories = () => {
   const loadCategories = async () => {
     setLoading(true);
     try {
-      const response = await categoriesAPI.getCategories({ 
+      const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
+      const params = {
         includeSubcategories: true,
-        limit: 100 
-      });
+        limit: 100,
+      };
+      if (storeId) {
+        params.store_id = storeId;
+      }
+
+      const response = await categoriesAPI.getCategories(params);
       console.log("Categories response:", response.data.categories);
       setCategories(response.data.categories || []);
     } catch (error) {
@@ -151,6 +172,69 @@ const Categories = () => {
     });
 
     setFilteredCategories(filtered);
+  };
+
+  const openCreateCategory = () => {
+    setNewCategoryName("");
+    setIsCreateCategoryOpen(true);
+  };
+
+  const closeCreateCategory = () => {
+    setIsCreateCategoryOpen(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    setSearchParams(next, { replace: true });
+  };
+
+  const handleCreateCategory = async () => {
+    if (!newCategoryName.trim()) {
+      toast({
+        title: "Validation Error",
+        description: "Category name is required",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setSaving(true);
+    try {
+      const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
+      const categoryData = {
+        name: newCategoryName.trim(),
+        subcategories: [],
+      };
+      if (storeId) {
+        categoryData.store_id = storeId;
+      }
+      await categoriesAPI.createCategory(categoryData);
+
+      toast({
+        title: "Success",
+        description: "Category created successfully",
+      });
+
+      closeCreateCategory();
+      await loadCategories();
+    } catch (error) {
+      console.error("Error creating category:", error);
+      let errorMessage = "Failed to create category";
+      if (error.message) {
+        if (error.message.includes("Access denied") || error.message.includes("Missing required screen permissions")) {
+          errorMessage = "You don't have permission to create categories. Please contact an administrator.";
+        } else if (error.message.includes("Validation failed")) {
+          errorMessage = "Please check your input and try again.";
+        } else {
+          errorMessage = error.message;
+        }
+      }
+      toast({
+        title: "Error",
+        description: errorMessage,
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
   };
 
 
@@ -669,10 +753,6 @@ const Categories = () => {
                   <DropdownMenuContent align="end">
                     {level === 0 && (
                       <>
-                        <DropdownMenuItem onClick={() => handleCreateCompleteFlow()}>
-                          <Package className="h-4 w-4 mr-2" />
-                          Complete Flow
-                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => handleAddSubcategoriesToCategory(category)}>
                           <Plus className="h-4 w-4 mr-2" />
                           Add Subcategories
@@ -764,10 +844,10 @@ const Categories = () => {
           <p className="text-gray-600 mt-1">Manage product categories and subcategories</p>
         </div>
         <div className="flex items-center space-x-2">
-          <Button onClick={handleCreateCompleteFlow} className="flex items-center space-x-2">
-            <Package className="h-4 w-4" />
-            <span>Complete Flow</span>
-        </Button>
+          <Button onClick={openCreateCategory} className="flex items-center space-x-2">
+            <Plus className="h-4 w-4" />
+            <span>Create Category</span>
+          </Button>
         </div>
       </div>
 
@@ -836,9 +916,9 @@ const Categories = () => {
                   : "Get started by creating your first category"}
               </p>
               {!searchTerm && filterStatus === "all" && (
-                <Button onClick={handleCreateCompleteFlow}>
-                  <Package className="h-4 w-4 mr-2" />
-                  Complete Flow
+                <Button onClick={openCreateCategory}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Create Category
                 </Button>
               )}
             </CardContent>
@@ -848,8 +928,49 @@ const Categories = () => {
         )}
       </div>
 
+      {/* Create Category Modal */}
+      <Modal
+        open={isCreateCategoryOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setIsCreateCategoryOpen(true);
+          } else {
+            closeCreateCategory();
+          }
+        }}
+        title="Create Category"
+        description="Create a new category by name."
+        className="max-w-lg"
+      >
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="new-category-name">Category Name *</Label>
+            <Input
+              id="new-category-name"
+              value={newCategoryName}
+              onChange={(e) => setNewCategoryName(e.target.value)}
+              placeholder="Enter category name"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleCreateCategory();
+                }
+              }}
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={closeCreateCategory}>
+              Cancel
+            </Button>
+            <Button onClick={handleCreateCategory} disabled={saving || !newCategoryName.trim()}>
+              {saving ? "Creating..." : "Create"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
 
-      {/* Multi-Step Complete Flow Modal */}
+
+      {/* Multi-Step Flow Modal */}
       <Modal
         open={isMultiStepModal}
         onOpenChange={setIsMultiStepModal}

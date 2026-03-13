@@ -12,11 +12,17 @@ import {
   billNumberParamValidation,
   customerPhoneParamValidation
 } from '../controllers/billController.js';
+import { createOrder, verifyPayment, getKey } from '../controllers/razorpayController.js';
 
 const router = express.Router();
 
 router.use(protect);
 router.use(requireScreen('billing'));
+
+// Razorpay (UPI) payment – create order, verify, and get public key
+router.get('/razorpay/key', getKey);
+router.post('/razorpay/create-order', createOrder);
+router.post('/razorpay/verify', verifyPayment);
 
 router.post(
   '/',
