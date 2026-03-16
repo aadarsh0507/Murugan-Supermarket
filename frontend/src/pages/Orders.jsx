@@ -82,6 +82,7 @@ const Orders = () => {
   const [returnRequestsList, setReturnRequestsList] = useState([]);
   const [loadingReturnRequests, setLoadingReturnRequests] = useState(false);
   const [selectedOrderReturnRequests, setSelectedOrderReturnRequests] = useState([]);
+  const [updatingReturnStatusId, setUpdatingReturnStatusId] = useState(null);
 
   useEffect(() => {
     loadOrders();
@@ -351,6 +352,36 @@ const Orders = () => {
       });
     } finally {
       setSubmittingReturn(false);
+    }
+  };
+
+  const handleReturnStatusChange = async (returnId, newStatus) => {
+    if (!returnId || !newStatus) return;
+    setUpdatingReturnStatusId(returnId);
+    try {
+      const response = await ordersAPI.updateReturnRequestStatus(returnId, newStatus);
+      const updatedStatus =
+        response?.data?.status ??
+        response?.status ??
+        newStatus;
+
+      setReturnRequestsList((prev) =>
+        prev.map((req) =>
+          req.id === returnId ? { ...req, status: updatedStatus } : req
+        )
+      );
+    } catch (error) {
+      toast({
+        title: getErrorTitle(error),
+        description: getErrorMessage(
+          error,
+          "Failed to update return status",
+          "return status"
+        ),
+        variant: "destructive",
+      });
+    } finally {
+      setUpdatingReturnStatusId(null);
     }
   };
 
@@ -922,7 +953,7 @@ const Orders = () => {
 
       {/* Return requests (from mobile app) dialog */}
       <Dialog open={showReturnRequestsDialog} onOpenChange={setShowReturnRequestsDialog}>
-        <DialogContent className="w-[100vw] max-w-[100vw] h-[100vh] sm:h-[100vh] overflow-y-auto flex flex-col p-4 sm:p-6">
+        <DialogContent className="!w-screen !h-screen !max-w-none sm:!w-screen sm:!h-screen overflow-y-auto flex flex-col p-4 sm:p-6 rounded-none sm:rounded-none">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <RotateCcw className="h-5 w-5" />
@@ -940,15 +971,15 @@ const Orders = () => {
                 No return requests from the mobile app.
               </div>
             ) : (
-              <div className="rounded-md border">
-                <Table>
+              <div className="rounded-md border overflow-x-auto">
+                <Table className="min-w-full table-auto">
                   <TableHeader>
                     <TableRow>
                       <TableHead>ID</TableHead>
                       <TableHead>Order ID</TableHead>
                       <TableHead>User ID</TableHead>
                       <TableHead>Reason</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>Owner Status</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="w-24">Image</TableHead>
                     </TableRow>
@@ -966,21 +997,26 @@ const Orders = () => {
                         <TableCell className="font-medium">{req.id}</TableCell>
                         <TableCell>#{req.orderId}</TableCell>
                         <TableCell>{req.userId}</TableCell>
-                        <TableCell className="max-w-[200px] truncate" title={req.reason || ""}>
+                        <TableCell className="max-w-[400px] whitespace-normal break-words" title={req.reason || ""}>
                           {req.reason || "—"}
                         </TableCell>
                         <TableCell>
-                          <Badge
-                            className={
-                              req.status === "pending"
-                                ? "bg-amber-100 text-amber-800"
-                                : req.status === "approved"
-                                ? "bg-green-100 text-green-800"
-                                : "bg-gray-100 text-gray-800"
+                          <Select
+                            value={req.status || "pending"}
+                            onValueChange={(value) =>
+                              handleReturnStatusChange(req.id, value)
                             }
+                            disabled={updatingReturnStatusId === req.id}
                           >
-                            {req.status || "pending"}
-                          </Badge>
+                            <SelectTrigger className="w-32 min-h-9 touch-target-y">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="pending">Pending</SelectItem>
+                              <SelectItem value="approved">Approved</SelectItem>
+                              <SelectItem value="rejected">Rejected</SelectItem>
+                            </SelectContent>
+                          </Select>
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">
                           {formatDate(req.createdAt)}

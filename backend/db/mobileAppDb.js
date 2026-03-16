@@ -74,12 +74,20 @@ const ensureMobileOrdersSchema = async () => {
   let connection;
   try {
     connection = await appPool.getConnection();
-    await connection.query(
-      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivery_note TEXT NULL'
-    );
-    await connection.query(
-      'ALTER TABLE orders ADD COLUMN IF NOT EXISTS is_active TINYINT(1) NOT NULL DEFAULT 1'
-    );
+    try {
+      await connection.query(
+        'ALTER TABLE orders ADD COLUMN delivery_note TEXT NULL'
+      );
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
+    try {
+      await connection.query(
+        'ALTER TABLE orders ADD COLUMN is_active TINYINT(1) NOT NULL DEFAULT 1'
+      );
+    } catch (e) {
+      if (e.code !== 'ER_DUP_FIELDNAME') throw e;
+    }
     // Return request columns: status, reason, attached image URL
     const returnCols = [
       ['return_status', 'VARCHAR(50) NULL'],

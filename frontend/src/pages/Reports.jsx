@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Search, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard, ShoppingBag } from "lucide-react";
+import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Search, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard, ShoppingBag, RotateCcw, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -99,6 +99,11 @@ export default function Reports() {
   const [ordersReportLoading, setOrdersReportLoading] = useState(false);
   const [ordersStatusFilter, setOrdersStatusFilter] = useState("all");
 
+  // Mobile Returns Report States
+  const [mobileReturns, setMobileReturns] = useState([]);
+  const [returnsReportLoading, setReturnsReportLoading] = useState(false);
+  const [returnsStatusFilter, setReturnsStatusFilter] = useState("all");
+
   const canFilterByUser = hasScreenAccess('user-rights') || hasScreenAccess('users');
   const restrictToOwnData = !canFilterByUser;
 
@@ -130,6 +135,7 @@ export default function Reports() {
       if (saved.creditViewMode) setCreditViewMode(saved.creditViewMode);
       if (saved.creditTypeFilter) setCreditTypeFilter(saved.creditTypeFilter);
       if (saved.ordersStatusFilter) setOrdersStatusFilter(saved.ordersStatusFilter);
+      if (saved.returnsStatusFilter) setReturnsStatusFilter(saved.returnsStatusFilter);
     } catch { }
 
     loadUsers();
@@ -145,6 +151,9 @@ export default function Reports() {
     }
     if (activeTab === "orders" || fromOrdersLink) {
       loadOrdersReportData();
+    }
+    if (activeTab === "returns") {
+      loadReturnsReportData();
     }
   }, []);
 
@@ -167,9 +176,10 @@ export default function Reports() {
       creditViewMode,
       creditTypeFilter,
       ordersStatusFilter,
+      returnsStatusFilter,
     };
     localStorage.setItem('reports_filters', JSON.stringify(toSave));
-  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter]);
+  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
 
   // Get store ID for dependency tracking - this ensures the effect runs when store changes
   const storeIdForEffect = selectedStore?._id || selectedStore?.id || null;
@@ -207,7 +217,10 @@ export default function Reports() {
     if (activeTab === "orders") {
       loadOrdersReportData();
     }
-  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter]);
+    if (activeTab === "returns") {
+      loadReturnsReportData();
+    }
+  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter]);
 
   const loadUsers = async () => {
     try {
@@ -320,6 +333,24 @@ export default function Reports() {
       });
     } finally {
       setOrdersReportLoading(false);
+    }
+  }, [toast]);
+
+  const loadReturnsReportData = useCallback(async () => {
+    setReturnsReportLoading(true);
+    try {
+      const response = await ordersAPI.getReturnRequests();
+      const data = response?.data ?? response ?? [];
+      setMobileReturns(Array.isArray(data) ? data : []);
+    } catch (error) {
+      setMobileReturns([]);
+      toast({
+        title: getErrorTitle(error),
+        description: getErrorMessage(error, "Failed to load returns report", "returns"),
+        variant: "destructive",
+      });
+    } finally {
+      setReturnsReportLoading(false);
     }
   }, [toast]);
 
@@ -972,6 +1003,29 @@ export default function Reports() {
     });
   }, [mobileOrders, dateFrom, dateTo, ordersStatusFilter]);
 
+  const filteredMobileReturns = useMemo(() => {
+    return mobileReturns.filter((ret) => {
+      const status = (ret.status || "").toLowerCase();
+      if (returnsStatusFilter !== "all" && status !== returnsStatusFilter) return false;
+      const rawDate = ret.createdAt || ret.created_at;
+      if (dateFrom && rawDate) {
+        const dt = new Date(rawDate);
+        if (!Number.isNaN(dt.getTime())) {
+          const from = new Date(`${dateFrom}T00:00:00`);
+          if (dt < from) return false;
+        }
+      }
+      if (dateTo && rawDate) {
+        const dt = new Date(rawDate);
+        if (!Number.isNaN(dt.getTime())) {
+          const to = new Date(`${dateTo}T23:59:59.999`);
+          if (dt > to) return false;
+        }
+      }
+      return true;
+    });
+  }, [mobileReturns, dateFrom, dateTo, returnsStatusFilter]);
+
   const ordersReportMetrics = useMemo(() => {
     let totalAmount = 0, deliveredAmount = 0, pendingCount = 0, deliveredCount = 0, cancelledCount = 0;
     filteredMobileOrders.forEach((order) => {
@@ -984,6 +1038,21 @@ export default function Reports() {
     });
     return { totalOrders: filteredMobileOrders.length, totalAmount, deliveredAmount, pendingCount, deliveredCount, cancelledCount };
   }, [filteredMobileOrders]);
+
+  const returnsReportMetrics = useMemo(() => {
+    let totalReturns = 0;
+    let pendingCount = 0;
+    let approvedCount = 0;
+    let rejectedCount = 0;
+    filteredMobileReturns.forEach((ret) => {
+      totalReturns += 1;
+      const status = (ret.status || "").toLowerCase();
+      if (status === "pending") pendingCount += 1;
+      else if (status === "approved") approvedCount += 1;
+      else if (status === "rejected") rejectedCount += 1;
+    });
+    return { totalReturns, pendingCount, approvedCount, rejectedCount };
+  }, [filteredMobileReturns]);
 
   const summarizeAmountHistory = (credit) => {
     if (!credit) return "No data";
@@ -1453,9 +1522,20 @@ export default function Reports() {
           <ShoppingBag className="h-4 w-4" />
           Orders (Mobile)
         </Button>
+        <Button
+          variant={activeTab === "returns" ? "default" : "ghost"}
+          onClick={() => {
+            setActiveTab("returns");
+            loadReturnsReportData();
+          }}
+          className="flex items-center gap-2"
+        >
+          <RotateCcw className="h-4 w-4" />
+          Returns (Mobile)
+        </Button>
       </motion.div>
 
-      {(activeTab === "sales" || activeTab === "purchase" || activeTab === "credits" || activeTab === "orders") && (
+      {(activeTab === "sales" || activeTab === "purchase" || activeTab === "credits" || activeTab === "orders" || activeTab === "returns") && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -1468,7 +1548,15 @@ export default function Reports() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className={`grid gap-4 ${activeTab === "sales" ? "md:grid-cols-4" : activeTab === "purchase" ? "md:grid-cols-6" : activeTab === "orders" ? "md:grid-cols-4" : "md:grid-cols-6"}`}>
+              <div className={`grid gap-4 ${
+                activeTab === "sales"
+                  ? "md:grid-cols-4"
+                  : activeTab === "purchase"
+                  ? "md:grid-cols-6"
+                  : activeTab === "orders" || activeTab === "returns"
+                  ? "md:grid-cols-4"
+                  : "md:grid-cols-6"
+              }`}>
                 {activeTab === "sales" ? (
                   <>
                     <div className="space-y-2">
@@ -1798,6 +1886,41 @@ export default function Reports() {
                           <SelectItem value="inprogress">In Progress</SelectItem>
                           <SelectItem value="delivered">Delivered</SelectItem>
                           <SelectItem value="cancelled">Cancelled</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </>
+                ) : activeTab === "returns" ? (
+                  <>
+                    <div className="space-y-2">
+                      <Label htmlFor="returnsDateFrom">From Date</Label>
+                      <Input
+                        id="returnsDateFrom"
+                        type="date"
+                        value={dateFrom}
+                        onChange={(e) => setDateFrom(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="returnsDateTo">To Date</Label>
+                      <Input
+                        id="returnsDateTo"
+                        type="date"
+                        value={dateTo}
+                        onChange={(e) => setDateTo(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="returnsStatus">Status</Label>
+                      <Select value={returnsStatusFilter} onValueChange={setReturnsStatusFilter}>
+                        <SelectTrigger id="returnsStatus">
+                          <SelectValue placeholder="All statuses" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="all">All statuses</SelectItem>
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="approved">Approved</SelectItem>
+                          <SelectItem value="rejected">Rejected</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -2185,6 +2308,105 @@ export default function Reports() {
                 </CardContent>
               </Card>
             </motion.div>
+          )}
+        </>
+      )}
+
+      {/* Returns Reports */}
+      {activeTab === "returns" && (
+        <>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 md:gap-6 min-w-0 mb-4">
+            <MetricCard
+              title="Total Returns"
+              value={returnsReportMetrics.totalReturns}
+              icon={RotateCcw}
+              delay={0.1}
+            />
+            <MetricCard
+              title="Pending"
+              value={returnsReportMetrics.pendingCount}
+              icon={Clock}
+              delay={0.2}
+            />
+            <MetricCard
+              title="Approved"
+              value={returnsReportMetrics.approvedCount}
+              icon={CheckCircle}
+              delay={0.3}
+            />
+            <MetricCard
+              title="Rejected"
+              value={returnsReportMetrics.rejectedCount}
+              icon={XCircle}
+              delay={0.4}
+            />
+          </div>
+
+          {returnsReportLoading && (
+            <div className="flex items-center justify-center py-12">
+              <RefreshCw className="h-8 w-8 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-muted-foreground">Loading returns report...</span>
+            </div>
+          )}
+
+          {!returnsReportLoading && filteredMobileReturns.length === 0 && (
+            <div className="text-center py-12 text-muted-foreground">
+              No return requests found for the selected filters.
+            </div>
+          )}
+
+          {!returnsReportLoading && filteredMobileReturns.length > 0 && (
+            <Card className="mt-4">
+              <CardHeader>
+                <CardTitle>Return Requests Report ({filteredMobileReturns.length})</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12">#</TableHead>
+                        <TableHead>Return ID</TableHead>
+                        <TableHead>Order ID</TableHead>
+                        <TableHead>User ID</TableHead>
+                        <TableHead>Reason</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead>Created</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMobileReturns.map((ret, index) => (
+                        <TableRow key={ret.id ?? index}>
+                          <TableCell>{index + 1}</TableCell>
+                          <TableCell>{ret.id}</TableCell>
+                          <TableCell>#{ret.orderId}</TableCell>
+                          <TableCell>{ret.userId}</TableCell>
+                          <TableCell className="max-w-[400px] whitespace-normal break-words">
+                            {ret.reason || "—"}
+                          </TableCell>
+                          <TableCell>
+                            <Badge
+                              className={
+                                (ret.status || "pending") === "pending"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : (ret.status || "pending") === "approved"
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-gray-100 text-gray-800"
+                              }
+                            >
+                              {ret.status || "pending"}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {formatDateValue(ret.createdAt || ret.created_at, true)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
           )}
         </>
       )}
