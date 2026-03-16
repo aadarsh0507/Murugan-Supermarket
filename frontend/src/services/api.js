@@ -669,6 +669,16 @@ export const ordersAPI = {
     return await apiRequest(endpoint);
   },
 
+  // Update status of a specific return request (owner/admin decision)
+  updateReturnRequestStatus: async (returnId, status) => {
+    if (!returnId) throw new Error('Return ID is required');
+    if (!status) throw new Error('Status is required');
+    return await apiRequest(`/mobile-orders/returns/${returnId}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  },
+
   // Submit order return (reason + optional image). Pass FormData with returnReason and optional 'image' file.
   submitOrderReturn: async (orderId, formData) => {
     if (!orderId) throw new Error('Order ID is required');

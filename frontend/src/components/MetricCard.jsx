@@ -22,12 +22,15 @@ export function MetricCard({
               <p className="text-xs sm:text-sm font-medium text-muted-foreground line-clamp-2 break-words">
                 {title}
               </p>
-              <p className="text-xl sm:text-2xl md:text-3xl font-bold truncate" title={typeof value === "string" ? value : String(value)}>
+              <p
+                className="text-xl sm:text-2xl md:text-3xl font-bold whitespace-nowrap"
+                title={typeof value === "string" ? value : String(value)}
+              >
                 {value}
               </p>
               {trend && (
                 <p
-                  className={`text-xs sm:text-sm font-medium truncate ${
+                  className={`text-xs sm:text-sm font-medium whitespace-nowrap ${
                     trendUp ? "text-success" : "text-destructive"
                   }`}
                   title={trend}

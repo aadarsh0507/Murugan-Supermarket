@@ -638,3 +638,79 @@ export const submitOrderReturn = async (req, res) => {
   }
 };
 
+export const updateOrderReturnStatus = async (req, res) => {
+  try {
+    if (!isMobileAppDbConfigured()) {
+      return res.status(503).json({
+        status: 'error',
+        message: 'Mobile app database is not configured.',
+      });
+    }
+
+    const returnId = req.params.id;
+    const { status } = req.body || {};
+
+    if (!returnId || !status) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Return ID and status are required.',
+      });
+    }
+
+    const normalizedStatus = String(status).trim().toLowerCase();
+
+    const result = await queryMobileApp(
+      'UPDATE order_returns SET status = ?, updatedAt = CURRENT_TIMESTAMP WHERE id = ?',
+      [normalizedStatus, returnId]
+    );
+
+    const affectedRows =
+      typeof result?.affectedRows === 'number'
+        ? result.affectedRows
+        : Array.isArray(result) && result[0]?.affectedRows !== undefined
+          ? result[0].affectedRows
+          : null;
+
+    if (affectedRows === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Return request not found.',
+      });
+    }
+
+    // Best-effort: also update the parent order's return_status so the app can see owner decision
+    try {
+      const rows = await queryMobileApp(
+        'SELECT orderId, order_id FROM order_returns WHERE id = ?',
+        [returnId]
+      );
+      if (Array.isArray(rows) && rows.length > 0) {
+        const row = rows[0];
+        const orderId = row.orderId ?? row.order_id;
+        if (orderId !== undefined && orderId !== null) {
+          await queryMobileApp(
+            'UPDATE orders SET return_status = ? WHERE id = ?',
+            [normalizedStatus, orderId]
+          );
+        }
+      }
+    } catch (linkError) {
+      console.error('Failed to propagate return status to order:', linkError.message);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Return status updated successfully.',
+      data: {
+        status: normalizedStatus,
+      },
+    });
+  } catch (error) {
+    console.error('Update order return status error:', error);
+    res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to update return status.',
+    });
+  }
+};
+

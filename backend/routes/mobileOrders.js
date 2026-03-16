@@ -12,6 +12,7 @@ import {
   updateDeliverySettings,
   listOrderReturns,
   submitOrderReturn,
+  updateOrderReturnStatus,
 } from '../controllers/mobileOrderController.js';
 
 const router = express.Router();
@@ -62,6 +63,7 @@ router.use(protect);
 
 router.get('/', listMobileOrders);
 router.get('/returns', listOrderReturns);
+router.patch('/returns/:id/status', updateOrderReturnStatus);
 router.get('/settings', getDeliverySettings);
 router.patch('/:id/return', handleReturnUpload, submitOrderReturn);
 router.get('/:id', getMobileOrderById);
