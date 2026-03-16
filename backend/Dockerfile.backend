@@ -9,16 +9,10 @@ RUN apk update && apk upgrade --no-cache && \
 RUN npm install -g npm@latest --unsafe-perm && \
     (npm cache clean --force || true)
 
-# Enable corepack for pnpm support
-RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
-
 WORKDIR /super_mart
 
-# Hoist node_modules so COPY includes all deps (pnpm default uses global store + symlinks)
-RUN echo "node-linker=hoisted" > .npmrc
-
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm install --frozen-lockfile --prod
+COPY package.json ./
+RUN npm install --omit=dev && (npm cache clean --force || true)
 
 COPY . .
 
