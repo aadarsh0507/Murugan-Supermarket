@@ -28,6 +28,7 @@ import creditRoutes from './routes/credits.js';
 import customerCreditRoutes from './routes/customerCredits.js';
 import screenRoutes from './routes/screens.js';
 import syncRoutes from './routes/sync.js';
+import { ensureDirectoryExists, uploadsRootDir } from './utils/uploads.js';
 import cron from 'node-cron';
 import { backupAndUpload } from './controllers/syncController.js';
 import { runDailyBackup } from './jobs/dailyBackup.js';
@@ -156,9 +157,10 @@ await syncModels();
 
 await initializeScreens();
 
+ensureDirectoryExists(uploadsRootDir);
 
-// Serve static files from uploads directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Serve static files from the same uploads directory used by multer.
+app.use('/uploads', express.static(uploadsRootDir));
 
 // Routes
 app.use('/api/auth', authRoutes);

@@ -35,8 +35,8 @@ RUN npm install -g npm@latest --unsafe-perm && \
 # Copy backend files from builder
 COPY --from=backend-builder /super_mart /super_mart
 
-# Create uploads directory
-RUN mkdir -p /super_mart/uploads/items
+# Create uploads directories
+RUN mkdir -p /super_mart/uploads/items /super_mart/uploads/returns
 
 EXPOSE 5000
 

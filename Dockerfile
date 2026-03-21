@@ -54,7 +54,7 @@ COPY --from=backend-builder /Super_Market/backend /Super_Market/backend
 COPY --from=frontend-builder /Super_Market/frontend/dist /usr/share/nginx/html
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 
-RUN mkdir -p /Super_Market/backend/uploads/items
+RUN mkdir -p /Super_Market/backend/uploads/items /Super_Market/backend/uploads/returns
 
 EXPOSE 8080
 

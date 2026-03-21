@@ -1,4 +1,130 @@
+import fs from 'fs';
+import path from 'path';
 import { queryMobileApp, isMobileAppDbConfigured } from '../db/mobileAppDb.js';
+import { uploadsRootDir } from '../utils/uploads.js';
+
+const trimTrailingSlash = (value = '') => String(value).replace(/\/+$/, '');
+
+const isHttpUrl = (value = '') => /^https?:\/\//i.test(String(value).trim());
+
+const inferMobileAppBaseUrl = () => {
+  const explicitBaseUrl =
+    process.env.MOBILE_APP_UPLOADS_BASE_URL ||
+    process.env.MOBILE_APP_BASE_URL ||
+    process.env.MOBILE_APP_URL ||
+    '';
+
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+
+  const mobileDbUrl =
+    process.env.MY_SQL_URI_APP ||
+    process.env.MY_SQL_URI ||
+    process.env.MOBILE_APP_DB_URL ||
+    '';
+
+  if (!mobileDbUrl) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(mobileDbUrl);
+    if (!parsed.hostname) {
+      return '';
+    }
+
+    const protocol = process.env.MOBILE_APP_PROTOCOL || 'http';
+    const port = process.env.MOBILE_APP_UPLOADS_PORT || '5002';
+    return `${protocol}://${parsed.hostname}:${port}`;
+  } catch {
+    return '';
+  }
+};
+
+const sanitizeReturnImageSource = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim().replace(/\\/g, '/');
+};
+
+const buildLocalReturnImageCandidates = (imageSource) => {
+  const normalized = sanitizeReturnImageSource(imageSource);
+  if (!normalized || isHttpUrl(normalized)) return [];
+
+  const withoutQuery = normalized.split('?')[0].split('#')[0];
+  const cleaned = withoutQuery.replace(/^\/+/, '');
+  const fileName = path.posix.basename(cleaned);
+  const matches = [];
+
+  const addCandidate = (candidate) => {
+    if (!candidate || typeof candidate !== 'string') return;
+    const normalizedCandidate = candidate.replace(/^\/+/, '');
+    if (!normalizedCandidate || matches.includes(normalizedCandidate)) return;
+    matches.push(normalizedCandidate);
+  };
+
+  addCandidate(cleaned);
+
+  const uploadsMatch = cleaned.match(/(?:^|\/)uploads\/(.+)/i);
+  if (uploadsMatch?.[1]) {
+    addCandidate(uploadsMatch[1]);
+  }
+
+  if (/^returns\//i.test(cleaned)) {
+    addCandidate(cleaned.replace(/^returns\//i, ''));
+  }
+
+  if (!/^returns\//i.test(cleaned) && fileName) {
+    addCandidate(`returns/${fileName}`);
+  }
+
+  return matches
+    .map((relativePath) => path.resolve(uploadsRootDir, relativePath))
+    .filter((absolutePath) => absolutePath.startsWith(uploadsRootDir));
+};
+
+const resolveLocalReturnImagePath = (imageSource) => {
+  const candidates = buildLocalReturnImageCandidates(imageSource);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+};
+
+const buildRemoteReturnImageCandidates = (imageSource) => {
+  const normalized = sanitizeReturnImageSource(imageSource);
+  if (!normalized) return [];
+  if (isHttpUrl(normalized)) return [normalized];
+
+  const baseUrl = inferMobileAppBaseUrl();
+
+  if (!baseUrl) return [];
+
+  const cleanBaseUrl = trimTrailingSlash(baseUrl);
+  const cleaned = normalized.replace(/^\/+/, '');
+  const fileName = path.posix.basename(cleaned);
+  const candidates = [];
+
+  const addCandidate = (candidateUrl) => {
+    if (!candidateUrl || candidates.includes(candidateUrl)) return;
+    candidates.push(candidateUrl);
+  };
+
+  addCandidate(`${cleanBaseUrl}/${cleaned}`);
+
+  if (!/^uploads\//i.test(cleaned)) {
+    addCandidate(`${cleanBaseUrl}/uploads/${cleaned}`);
+  }
+
+  if (!/^returns\//i.test(cleaned) && fileName) {
+    addCandidate(`${cleanBaseUrl}/uploads/returns/${fileName}`);
+    addCandidate(`${cleanBaseUrl}/returns/${fileName}`);
+  }
+
+  return candidates;
+};
 
 const getFirstFromRow = (row = {}, candidates = []) => {
   if (!row || typeof row !== 'object') return undefined;
@@ -539,6 +665,55 @@ const normalizeOrderReturnRow = (row = {}) => {
     createdAt: getFirstFromRow(row, ['createdAt', 'created_at']) || null,
     updatedAt: getFirstFromRow(row, ['updatedAt', 'updated_at']) || null,
   };
+};
+
+export const serveOrderReturnImage = async (req, res) => {
+  try {
+    const imageSource = req.query.src || req.query.imageUrl || req.query.image_url;
+
+    if (!imageSource || typeof imageSource !== 'string') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Image source is required.',
+      });
+    }
+
+    const localImagePath = resolveLocalReturnImagePath(imageSource);
+    if (localImagePath) {
+      return res.sendFile(localImagePath);
+    }
+
+    const remoteCandidates = buildRemoteReturnImageCandidates(imageSource);
+    for (const candidateUrl of remoteCandidates) {
+      try {
+        const upstreamResponse = await fetch(candidateUrl);
+        if (!upstreamResponse.ok) {
+          continue;
+        }
+
+        const contentType = upstreamResponse.headers.get('content-type');
+        if (contentType) {
+          res.setHeader('Content-Type', contentType);
+        }
+
+        const arrayBuffer = await upstreamResponse.arrayBuffer();
+        return res.send(Buffer.from(arrayBuffer));
+      } catch (_error) {
+        // Try the next candidate URL.
+      }
+    }
+
+    return res.status(404).json({
+      status: 'error',
+      message: 'Return image not found.',
+    });
+  } catch (error) {
+    console.error('Serve order return image error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to load return image.',
+    });
+  }
 };
 
 export const listOrderReturns = async (req, res) => {

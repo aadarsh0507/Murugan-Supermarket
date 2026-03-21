@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { ordersAPI } from "@/services/api";
+import { API_BASE_URL, ordersAPI } from "@/services/api";
 import { getErrorMessage, getErrorTitle } from "@/utils/errorMessages";
 import { format } from "date-fns";
 import {
@@ -51,9 +51,7 @@ const hasReturn = (order) => {
 
 const getReturnImageSrc = (imageUrl) => {
   if (!imageUrl || typeof imageUrl !== "string") return null;
-  const base = import.meta.env?.VITE_BACKEND_URL ?? "";
-  const uploadsBase = base ? base.replace(/\/api\/?$/, "") : "";
-  return imageUrl.startsWith("http") ? imageUrl : `${uploadsBase}${imageUrl.startsWith("/") ? "" : "/"}${imageUrl}`;
+  return `${API_BASE_URL}/mobile-orders/return-image?src=${encodeURIComponent(imageUrl)}`;
 };
 
 const Orders = () => {
@@ -857,7 +855,13 @@ const Orders = () => {
                               </span>
                               <div className="rounded-md border bg-muted/30 overflow-hidden inline-block max-w-full">
                                 <img
-                                  src={selectedOrder.returnImageUrl || selectedOrder.return_image_url}
+                                  src={
+                                    getReturnImageSrc(
+                                      selectedOrder.returnImageUrl || selectedOrder.return_image_url
+                                    ) ||
+                                    selectedOrder.returnImageUrl ||
+                                    selectedOrder.return_image_url
+                                  }
                                   alt="Return attachment"
                                   className="max-h-64 w-auto object-contain"
                                 />
