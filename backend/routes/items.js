@@ -1,6 +1,5 @@
 import express from 'express';
 import multer from 'multer';
-import fs from 'fs';
 import path from 'path';
 import {
   getAllItems,
@@ -15,21 +14,14 @@ import {
   getStockWithBatches
 } from '../controllers/itemController.js';
 import { protect, requireScreen } from '../middleware/auth.js';
+import { ensureDirectoryExists, itemUploadsDir } from '../utils/uploads.js';
 
 const router = express.Router();
 
-const uploadDirectory = path.resolve('uploads/items');
-
-const ensureUploadDirectoryExists = () => {
-  if (!fs.existsSync(uploadDirectory)) {
-    fs.mkdirSync(uploadDirectory, { recursive: true });
-  }
-};
-
 const itemImageStorage = multer.diskStorage({
   destination: async (req, file, cb) => {
-    ensureUploadDirectoryExists();
-    cb(null, uploadDirectory);
+    ensureDirectoryExists(itemUploadsDir);
+    cb(null, itemUploadsDir);
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;

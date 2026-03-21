@@ -1,8 +1,8 @@
 import express from 'express';
 import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
 import { protect } from '../middleware/auth.js';
+import { ensureDirectoryExists, returnUploadsDir } from '../utils/uploads.js';
 import {
   listMobileOrders,
   getMobileOrderById,
@@ -12,22 +12,16 @@ import {
   updateDeliverySettings,
   listOrderReturns,
   submitOrderReturn,
+  serveOrderReturnImage,
   updateOrderReturnStatus,
 } from '../controllers/mobileOrderController.js';
 
 const router = express.Router();
 
-const uploadReturnsDir = path.resolve('uploads/returns');
-const ensureReturnsUploadDir = () => {
-  if (!fs.existsSync(uploadReturnsDir)) {
-    fs.mkdirSync(uploadReturnsDir, { recursive: true });
-  }
-};
-
 const returnImageStorage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    ensureReturnsUploadDir();
-    cb(null, uploadReturnsDir);
+    ensureDirectoryExists(returnUploadsDir);
+    cb(null, returnUploadsDir);
   },
   filename: (_req, file, cb) => {
     const ext = path.extname(file.originalname || '') || '.jpg';
@@ -58,6 +52,8 @@ const handleReturnUpload = (req, res, next) => {
     next();
   });
 };
+
+router.get('/return-image', serveOrderReturnImage);
 
 router.use(protect);
 
