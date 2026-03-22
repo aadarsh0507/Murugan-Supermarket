@@ -3,7 +3,7 @@ import { ArrowLeft, Database, FileText, Lock, ShieldCheck } from "lucide-react";
 
 const MOBILE_COMPANY_NAME = "Sri Murugan Supermarket";
 const SUPPORT_EMAIL = "jprsupermarket@gmail.com";
-const MOBILE_CONTACT_PHONE = "9445 750954";
+const MOBILE_CONTACT_PHONE = "9445750954";
 const MOBILE_CONTACT_ADDRESS =
   "Sothupakkam 47, Cheyur - Vandavasi Rd, Melmaruvathur, Tamil Nadu 603319";
 const EFFECTIVE_DATE = "March 22, 2026";
@@ -208,6 +208,16 @@ export default function PrivacyPolicy() {
                     className="font-medium text-red-600 hover:text-red-700 hover:underline"
                   >
                     {SUPPORT_EMAIL}
+                  </a>
+                  .
+                </p>
+                <p>
+                  Users can request account deletion by contacting{" "}
+                  <a
+                    href="mailto:srimuruganmarketing@gmail.com"
+                    className="font-medium text-red-600 hover:text-red-700 hover:underline"
+                  >
+                    srimuruganmarketing@gmail.com
                   </a>
                   .
                 </p>
