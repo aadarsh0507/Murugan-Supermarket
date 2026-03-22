@@ -214,10 +214,10 @@ export default function PrivacyPolicy() {
                 <p>
                   Users can request account deletion by contacting{" "}
                   <a
-                    href="mailto:srimuruganmarketing@gmail.com"
+                    href="mailto:jprsupermarket@gmail.com"
                     className="font-medium text-red-600 hover:text-red-700 hover:underline"
                   >
-                    srimuruganmarketing@gmail.com
+                    jprsupermarket@gmail.com
                   </a>
                   .
                 </p>
