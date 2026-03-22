@@ -25,7 +25,7 @@ import { useAuth } from "@/contexts/AuthContext";
 export default function Register() {
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { register, isLoading, error, clearError } = useAuth();
+  const { register, isLoading, clearError } = useAuth();
 
   // Form state
   const [formData, setFormData] = useState({
@@ -451,9 +451,9 @@ export default function Register() {
                       Terms and Conditions
                     </Button>{" "}
                     and{" "}
-                    <Button variant="link" className="px-0 text-primary h-auto">
+                    <Link to="/privacy-policy" className="text-primary underline-offset-4 hover:underline">
                       Privacy Policy
-                    </Button>
+                    </Link>
                   </label>
                 </div>
                 {formErrors.terms && (

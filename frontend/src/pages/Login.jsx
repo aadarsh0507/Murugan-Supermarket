@@ -172,12 +172,18 @@ export default function Login() {
                     )}
                   </Button>
 
-                  <div className="text-center mt-4">
+                  <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:justify-center">
                     <Link
                       to="/forgot-password"
-                      className="text-blue-600 hover:text-blue-800 hover:underline text-sm font-medium transition-colors duration-200"
+                      className="inline-flex items-center justify-center rounded-lg border border-blue-200 px-4 py-2 text-sm font-medium text-blue-600 transition-colors duration-200 hover:bg-blue-50 hover:text-blue-800"
                     >
                       Forgot Password?
+                    </Link>
+                    <Link
+                      to="/privacy-policy"
+                      className="inline-flex items-center justify-center rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors duration-200 hover:bg-gray-50 hover:text-gray-900"
+                    >
+                      Privacy Policy
                     </Link>
                   </div>
                 </form>

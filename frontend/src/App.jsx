@@ -10,6 +10,7 @@ import PublicRoute from "./components/PublicRoute";
 import Login from "./pages/Login";
 import Register from "./pages/Register";
 import ForgotPassword from "./pages/ForgotPassword";
+import PrivacyPolicy from "./pages/PrivacyPolicy";
 import Dashboard from "./pages/Dashboard";
 import Items from "./pages/Items";
 import Categories from "./pages/Categories";
@@ -63,6 +64,14 @@ const App = () => (
               element={
                 <PublicRoute>
                   <ForgotPassword />
+                </PublicRoute>
+              }
+            />
+            <Route
+              path="/privacy-policy"
+              element={
+                <PublicRoute>
+                  <PrivacyPolicy />
                 </PublicRoute>
               }
             />

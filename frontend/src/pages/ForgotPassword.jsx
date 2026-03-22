@@ -427,7 +427,7 @@ export default function ForgotPassword() {
               </div>
               <div className="rounded-2xl bg-gradient-to-r from-blue-600 to-purple-500 text-white p-5">
                 <p className="text-sm font-semibold uppercase tracking-[0.3em] mb-2">Need help?</p>
-                <p className="text-lg font-semibold mb-1">info@pushdiggy.com</p>
+                <p className="text-lg font-semibold mb-1">jpsupermarket@gmail.com</p>
                 <p className="text-sm opacity-90">Our team typically replies within a few hours.</p>
               </div>
             </div>
