@@ -2365,7 +2365,7 @@ export default function Reports() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead className="w-12">#</TableHead>
+                        <TableHead className="w-12">S.No.</TableHead>
                         <TableHead>Return ID</TableHead>
                         <TableHead>Order ID</TableHead>
                         <TableHead>User ID</TableHead>
@@ -2896,6 +2896,7 @@ export default function Reports() {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead className="w-12">S.No.</TableHead>
                         <TableHead>Order ID</TableHead>
                         <TableHead>Customer</TableHead>
                         <TableHead>Phone</TableHead>
@@ -2908,8 +2909,9 @@ export default function Reports() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {filteredMobileOrders.map((order) => (
+                      {filteredMobileOrders.map((order, index) => (
                         <TableRow key={order.id}>
+                          <TableCell className="text-muted-foreground">{index + 1}</TableCell>
                           <TableCell className="font-medium">{order.id}</TableCell>
                           <TableCell>{order.customerName || `User ${order.userId}` || "-"}</TableCell>
                           <TableCell>{order.customerPhone || "-"}</TableCell>

@@ -574,6 +574,7 @@ const Orders = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>S.No.</TableHead>
                     <TableHead>Order ID</TableHead>
                     <TableHead>Customer Name</TableHead>
                     <TableHead>Phone</TableHead>
@@ -590,12 +591,13 @@ const Orders = () => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredOrders.map((order) => (
+                  {filteredOrders.map((order, index) => (
                     <TableRow
                       key={order.id}
                       className="cursor-pointer hover:bg-muted/50"
                       onClick={() => handleOrderClick(order)}
                     >
+                      <TableCell className="text-muted-foreground">{index + 1}</TableCell>
                       <TableCell className="font-medium">{order.id}</TableCell>
                       <TableCell className="font-medium">
                         {order.customerName || `User ${order.userId}` || "-"}
@@ -979,6 +981,7 @@ const Orders = () => {
                 <Table className="min-w-full table-auto">
                   <TableHeader>
                     <TableRow>
+                      <TableHead>S.No.</TableHead>
                       <TableHead>ID</TableHead>
                       <TableHead>Order ID</TableHead>
                       <TableHead>User ID</TableHead>
@@ -989,7 +992,7 @@ const Orders = () => {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {returnRequestsList.map((req) => (
+                    {returnRequestsList.map((req, index) => (
                       <TableRow
                         key={req.id}
                         className="cursor-pointer hover:bg-muted/50"
@@ -998,6 +1001,7 @@ const Orders = () => {
                           handleOrderClick({ id: req.orderId });
                         }}
                       >
+                        <TableCell className="text-muted-foreground">{index + 1}</TableCell>
                         <TableCell className="font-medium">{req.id}</TableCell>
                         <TableCell>#{req.orderId}</TableCell>
                         <TableCell>{req.userId}</TableCell>
