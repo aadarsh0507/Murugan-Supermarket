@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import {
   listItems,
   getItemById as getItemByIdRepo,
@@ -8,6 +10,134 @@ import {
   getStockWithBatches as getStockWithBatchesRepo,
   syncLegacyProductRecord as syncLegacyProductRecordRepo
 } from '../repositories/itemRepository.js';
+import { uploadsRootDir } from '../utils/uploads.js';
+
+const trimTrailingSlash = (value = '') => String(value).replace(/\/+$/, '');
+
+const isHttpUrl = (value = '') => /^https?:\/\//i.test(String(value).trim());
+
+const sanitizeItemImageSource = (value) => {
+  if (typeof value !== 'string') {
+    return '';
+  }
+
+  return value.trim().replace(/\\/g, '/');
+};
+
+const buildLocalItemImageCandidates = (imageSource) => {
+  const normalized = sanitizeItemImageSource(imageSource);
+  if (!normalized || isHttpUrl(normalized)) {
+    return [];
+  }
+
+  const withoutQuery = normalized.split('?')[0].split('#')[0];
+  const cleaned = withoutQuery.replace(/^\/+/, '');
+  const fileName = path.posix.basename(cleaned);
+  const matches = [];
+
+  const addCandidate = (candidate) => {
+    if (!candidate || typeof candidate !== 'string') {
+      return;
+    }
+
+    const normalizedCandidate = candidate.replace(/^\/+/, '');
+    if (!normalizedCandidate || matches.includes(normalizedCandidate)) {
+      return;
+    }
+
+    matches.push(normalizedCandidate);
+  };
+
+  addCandidate(cleaned);
+
+  const uploadsMatch = cleaned.match(/(?:^|\/)uploads\/(.+)/i);
+  if (uploadsMatch?.[1]) {
+    addCandidate(uploadsMatch[1]);
+  }
+
+  if (/^items\//i.test(cleaned)) {
+    addCandidate(cleaned.replace(/^items\//i, ''));
+  }
+
+  if (!/^items\//i.test(cleaned) && fileName) {
+    addCandidate(`items/${fileName}`);
+  }
+
+  return matches
+    .map((relativePath) => path.resolve(uploadsRootDir, relativePath))
+    .filter((absolutePath) => absolutePath.startsWith(uploadsRootDir));
+};
+
+const resolveLocalItemImagePath = (imageSource) => {
+  const candidates = buildLocalItemImageCandidates(imageSource);
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+};
+
+const buildRequestBaseUrl = (req) => {
+  const forwardedProto = req.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const forwardedHost = req.get('x-forwarded-host')?.split(',')[0]?.trim();
+  const protocol = forwardedProto || req.protocol || 'http';
+  const host = forwardedHost || req.get('host');
+
+  return host ? `${protocol}://${host}` : '';
+};
+
+const buildPublicItemImageUrl = (req, imageSource) => {
+  const normalized = sanitizeItemImageSource(imageSource);
+  if (!normalized) {
+    return null;
+  }
+
+  if (isHttpUrl(normalized)) {
+    return normalized;
+  }
+
+  const configuredBaseUrl =
+    process.env.ITEM_IMAGE_BASE_URL ||
+    process.env.UPLOADS_BASE_URL ||
+    process.env.BACKEND_PUBLIC_URL ||
+    process.env.API_PUBLIC_URL ||
+    '';
+
+  const baseUrl = trimTrailingSlash(configuredBaseUrl || buildRequestBaseUrl(req));
+  if (!baseUrl) {
+    return normalized;
+  }
+
+  return `${baseUrl}/api/items/image?src=${encodeURIComponent(normalized)}`;
+};
+
+const normalizeItemImage = (item, req) => {
+  if (!item || typeof item !== 'object') {
+    return item;
+  }
+
+  const savedImagePath = item.imageUrl ?? item.image_url ?? null;
+  if (!savedImagePath) {
+    return item;
+  }
+
+  return {
+    ...item,
+    imageUrl: buildPublicItemImageUrl(req, savedImagePath),
+    imagePath: sanitizeItemImageSource(savedImagePath)
+  };
+};
+
+const normalizeItemsResponse = (items, req) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  return items.map((item) => normalizeItemImage(item, req));
+};
 
 const parseNumber = (value, defaultValue = undefined) => {
   if (value === undefined || value === null || value === '') {
@@ -42,6 +172,55 @@ const buildPagination = ({ offset = 0, limit = 0, total = 0, itemsLength = 0 }) 
     hasNext,
     nextCursor: hasNext ? offset + itemsLength : null
   };
+};
+
+export const serveItemImage = async (req, res) => {
+  try {
+    const imageSource = req.query.src || req.query.imageUrl || req.query.image_url;
+
+    if (!imageSource || typeof imageSource !== 'string') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Image source is required'
+      });
+    }
+
+    const normalizedSource = sanitizeItemImageSource(imageSource);
+
+    if (isHttpUrl(normalizedSource)) {
+      const upstreamResponse = await fetch(normalizedSource);
+      if (!upstreamResponse.ok) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Item image not found'
+        });
+      }
+
+      const contentType = upstreamResponse.headers.get('content-type');
+      if (contentType) {
+        res.setHeader('Content-Type', contentType);
+      }
+
+      const arrayBuffer = await upstreamResponse.arrayBuffer();
+      return res.send(Buffer.from(arrayBuffer));
+    }
+
+    const localImagePath = resolveLocalItemImagePath(normalizedSource);
+    if (localImagePath) {
+      return res.sendFile(localImagePath);
+    }
+
+    return res.status(404).json({
+      status: 'error',
+      message: 'Item image not found'
+    });
+  } catch (error) {
+    console.error('Serve item image error:', error);
+    return res.status(500).json({
+      status: 'error',
+      message: error.message || 'Failed to load item image'
+    });
+  }
 };
 
 const normalizeItemPayload = (body = {}, req = null) => {
@@ -216,10 +395,12 @@ export const getAllItems = async (req, res) => {
       itemsLength: items.length
     });
 
+    const normalizedItems = normalizeItemsResponse(items, req);
+
     return res.status(200).json({
       status: 'success',
       data: {
-        items,
+        items: normalizedItems,
         pagination
       }
     });
@@ -252,7 +433,7 @@ export const getItemById = async (req, res) => {
 
     res.json({
       status: 'success',
-      data: { item }
+      data: { item: normalizeItemImage(item, req) }
     });
   } catch (error) {
     console.error('Error fetching item:', error);
@@ -283,7 +464,7 @@ export const getItemByBarcode = async (req, res) => {
 
     res.json({
       status: 'success',
-      data: { item }
+      data: { item: normalizeItemImage(item, req) }
     });
   } catch (error) {
     console.error('Error fetching item by barcode:', error);
@@ -360,7 +541,7 @@ export const createItem = async (req, res) => {
     res.status(201).json({
       status: 'success',
       message: 'Item created successfully',
-      data: { item }
+      data: { item: normalizeItemImage(item, req) }
     });
   } catch (error) {
     console.error('Error creating item:', error);
@@ -458,7 +639,7 @@ export const updateItem = async (req, res) => {
     return res.status(200).json({
       status: 'success',
       message: 'Item updated successfully',
-      data: { item: updated }
+      data: { item: normalizeItemImage(updated, req) }
     });
   } catch (error) {
     console.error('Error updating item:', error);
@@ -535,7 +716,7 @@ export const toggleItemStatus = async (req, res) => {
     res.json({
       status: 'success',
       message: `Item ${updated.isActive ? 'activated' : 'deactivated'} successfully`,
-      data: { item: updated }
+      data: { item: normalizeItemImage(updated, req) }
     });
   } catch (error) {
     console.error('Error toggling item status:', error);
@@ -580,7 +761,7 @@ export const uploadItemImage = async (req, res) => {
     res.json({
       status: 'success',
       message: 'Item image updated successfully',
-      data: { item: updated }
+      data: { item: normalizeItemImage(updated, req) }
     });
   } catch (error) {
     console.error('Item image upload error:', error);
