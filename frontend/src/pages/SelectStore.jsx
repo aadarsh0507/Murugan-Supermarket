@@ -1,9 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { Store, Check, MapPin, Phone, Mail, ArrowLeft } from "lucide-react";
+import { Store, Check, Phone, Mail, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { suppliersAPI, usersAPI } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
@@ -18,6 +17,62 @@ export default function SelectStore() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [currentSelectedStore, setCurrentSelectedStore] = useState(null);
+  const isAdmin = Boolean(user?.isAdmin ?? user?.is_admin);
+
+  const accessibleStoreIds = useMemo(() => {
+    if (isAdmin) {
+      return null;
+    }
+
+    const storeCandidates = [
+      ...(Array.isArray(user?.stores) ? user.stores : []),
+      user?.primaryStore,
+      user?.store,
+      user?.storeId,
+      user?.store_id,
+    ];
+
+    return Array.from(
+      new Set(
+        storeCandidates
+          .map((storeLike) => {
+            if (storeLike === null || storeLike === undefined) return null;
+            if (typeof storeLike === "object") {
+              return String(
+                storeLike.id ??
+                storeLike._id ??
+                storeLike.storeId ??
+                storeLike.store_id ??
+                ""
+              ).trim() || null;
+            }
+            return String(storeLike).trim() || null;
+          })
+          .filter(Boolean)
+      )
+    );
+  }, [isAdmin, user]);
+
+  const isStoreAccessible = (storeLike) => {
+    if (isAdmin) {
+      return true;
+    }
+
+    if (!Array.isArray(accessibleStoreIds) || accessibleStoreIds.length === 0) {
+      return false;
+    }
+
+    const storeId =
+      typeof storeLike === "object" && storeLike !== null
+        ? storeLike.id ?? storeLike._id ?? storeLike.storeId ?? storeLike.store_id
+        : storeLike;
+
+    if (storeId === null || storeId === undefined) {
+      return false;
+    }
+
+    return accessibleStoreIds.includes(String(storeId).trim());
+  };
 
   useEffect(() => {
     if (user) {
@@ -35,10 +90,16 @@ export default function SelectStore() {
   const loadStores = async () => {
     setLoading(true);
     try {
+      if (!isAdmin && Array.isArray(accessibleStoreIds) && accessibleStoreIds.length === 0) {
+        setStores([]);
+        return;
+      }
+
       const allStores = await suppliersAPI.getStores({ isActive: true });
-      // Always show all stores - don't filter by user's assigned stores
-      // Users should be able to see and select from all available stores
-      setStores(allStores);
+      const allowedStores = isAdmin
+        ? allStores
+        : allStores.filter((store) => isStoreAccessible(store));
+      setStores(allowedStores);
     } catch (error) {
       console.error("Error loading stores:", error);
       toast({
@@ -49,24 +110,35 @@ export default function SelectStore() {
     } finally {
       setLoading(false);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   };
 
   const loadCurrentSelectedStore = async () => {
     try {
+      if (!isAdmin && Array.isArray(accessibleStoreIds) && accessibleStoreIds.length === 0) {
+        setCurrentSelectedStore(null);
+        setSelectedStoreId(null);
+        return;
+      }
+
       // Use selectedStore from auth context first, then fallback to API
-      if (selectedStore) {
+      if (selectedStore && isStoreAccessible(selectedStore)) {
         setCurrentSelectedStore(selectedStore);
         setSelectedStoreId(selectedStore.id ?? selectedStore._id);
       } else {
         const response = await usersAPI.getSelectedStore();
-        if (response.data?.selectedStore) {
+        if (response.data?.selectedStore && isStoreAccessible(response.data.selectedStore)) {
           setCurrentSelectedStore(response.data.selectedStore);
           setSelectedStoreId(response.data.selectedStore.id ?? response.data.selectedStore._id);
+        } else {
+          setCurrentSelectedStore(null);
+          setSelectedStoreId(null);
         }
       }
     } catch (error) {
       console.error("Error loading selected store:", error);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   };
 
   const handleSelectStore = async (storeId) => {
@@ -181,8 +253,8 @@ export default function SelectStore() {
           <CardContent className="pt-6">
             <div className="text-center py-12">
               <Store className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold mb-2">No stores available</h3>
-              <p className="text-muted-foreground">Please contact your administrator to add stores</p>
+              <h3 className="text-lg font-semibold mb-2">No store access assigned</h3>
+              <p className="text-muted-foreground">Please contact your administrator to grant store access</p>
             </div>
           </CardContent>
         </Card>

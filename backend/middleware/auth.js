@@ -7,8 +7,6 @@ import {
   normalizeScreenIdList
 } from '../constants/screens.js';
 
-const DEFAULT_STANDARD_EXPIRY = '24h';
-const DEFAULT_REMEMBER_EXPIRY = '30d';
 const ALL_SCREEN_IDS = SCREEN_DEFINITIONS.map((screen) => screen.id);
 
 export const resolveJwtExpiresIn = ({ rememberMe = false, expiresIn } = {}) => {
@@ -19,7 +17,7 @@ export const resolveJwtExpiresIn = ({ rememberMe = false, expiresIn } = {}) => {
   if (envValue) {
     return envValue;
   }
-  return rememberMe ? DEFAULT_REMEMBER_EXPIRY : DEFAULT_STANDARD_EXPIRY;
+  return null;
 };
 
 export const jwtExpiryToMs = (value) => {
@@ -83,7 +81,9 @@ const getTokenFromRequest = (req) => {
 // Generate JWT token
 export const generateToken = (userId, options = {}) => {
   const expiresIn = resolveJwtExpiresIn(options);
-  return jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn });
+  return expiresIn
+    ? jwt.sign({ userId }, process.env.JWT_SECRET, { expiresIn })
+    : jwt.sign({ userId }, process.env.JWT_SECRET);
 };
 
 // Verify JWT token

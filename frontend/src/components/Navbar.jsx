@@ -31,12 +31,11 @@ export function Navbar({ onMenuClick }) {
   });
   const [updatingPassword, setUpdatingPassword] = useState(false);
 
-  // Get store name from selected store, default to "Murugan Super Market"
-  const storeName = selectedStore?.name || "Murugan Super Market";
-  // Get store initials from store name or default to "MS"
+  // Show the brand instead of a store name when no store is assigned/selected.
+  const storeName = selectedStore?.name || "SuperMart";
   const storeInitials = selectedStore?.name
     ? selectedStore.name.split(' ').map(word => word[0]).join('').toUpperCase().slice(0, 2)
-    : "MS";
+    : "SM";
 
   const handleLogout = async () => {
     try {

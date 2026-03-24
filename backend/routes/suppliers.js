@@ -6,6 +6,7 @@ import {
   createSupplier,
   updateSupplier,
   deleteSupplier,
+  toggleSupplierStatus,
   listStores as listSupplierStores,
   createStore as createSupplierStore,
   updateStore as updateSupplierStore,
@@ -73,6 +74,12 @@ router.delete(
   '/:supplierCode/stores/:storeId',
   supplierCodeParam,
   removeStoreFromSupplier
+);
+
+router.patch(
+  '/:supplierCode/toggle-status',
+  supplierCodeParam,
+  toggleSupplierStatus
 );
 
 router.post(
