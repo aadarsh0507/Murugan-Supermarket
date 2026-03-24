@@ -1034,7 +1034,7 @@ const Credits = () => {
       // Fetch saved item overrides
       let itemOverridesMap = new Map();
       try {
-        const creditDetailResponse = await customerCreditsAPI.getCustomerCredit(credit.billId || credit._id);
+        const creditDetailResponse = await customerCreditsAPI.getCustomerCredit(credit._id);
         const creditDetail = creditDetailResponse?.data || {};
         if (creditDetail.itemOverrides && Array.isArray(creditDetail.itemOverrides)) {
           creditDetail.itemOverrides.forEach((override) => {
@@ -1057,7 +1057,9 @@ const Credits = () => {
           itemId: it.itemId || it._id || it.id || null,
           itemName: override?.itemName || it.itemName || it.name || "Item",
           // Keep product code separate and use dedicated HSN fields
-          itemCode: it.itemCode || "",
+          itemCode: it.itemCode || it.item_code || "",
+          batch: it.batch || it.batchNumber || "",
+          mrp: Number(it.mrp ?? it.MRP ?? 0),
           hsnCode: override?.hsnCode || it.hsnCode || it.hsn_code || it.HSN || it.hsn || "",
           hsnId: it.hsnId || it.HSNId || "",
           quantity: override?.quantity !== null && override?.quantity !== undefined 
@@ -1309,7 +1311,7 @@ const Credits = () => {
       // Fetch saved item overrides to apply to bill items
       let itemOverridesMap = new Map();
       try {
-        const creditDetailResponse = await customerCreditsAPI.getCustomerCredit(credit.billId || credit._id);
+        const creditDetailResponse = await customerCreditsAPI.getCustomerCredit(credit._id);
         const creditDetail = creditDetailResponse?.data || {};
         if (creditDetail.itemOverrides && Array.isArray(creditDetail.itemOverrides)) {
           creditDetail.itemOverrides.forEach((override) => {
@@ -1330,6 +1332,10 @@ const Credits = () => {
         if (override) {
           return {
             ...item,
+            itemName: override.itemName || item.itemName || item.name || "Item",
+            itemCode: item.itemCode || item.item_code || "",
+            batch: item.batch || item.batchNumber || "",
+            mrp: Number(item.mrp ?? item.MRP ?? 0),
             taxRate: override.taxRate !== null && override.taxRate !== undefined ? override.taxRate : (item.taxRate || 0),
             unitPrice: override.unitPrice !== null && override.unitPrice !== undefined ? override.unitPrice : item.unitPrice,
             quantity: override.quantity !== null && override.quantity !== undefined ? override.quantity : item.quantity,
@@ -1340,6 +1346,10 @@ const Credits = () => {
         // If no override, ensure taxRate is 0 if not explicitly set
         return {
           ...item,
+          itemName: item.itemName || item.name || "Item",
+          itemCode: item.itemCode || item.item_code || "",
+          batch: item.batch || item.batchNumber || "",
+          mrp: Number(item.mrp ?? item.MRP ?? 0),
           taxRate: item.taxRate !== null && item.taxRate !== undefined ? item.taxRate : 0,
         };
       });
@@ -1591,13 +1601,13 @@ const Credits = () => {
   }
 
   return (
-    <div className="space-y-4 min-w-0 overflow-x-hidden">
+    <div className="space-y-4">
       {/* Header */}
-      <Card className="overflow-hidden">
-        <CardHeader className="px-3 py-4 sm:px-6 sm:py-6">
-          <div className="flex items-center min-w-0">
-            <CardTitle className="text-xl sm:text-2xl text-blue-600 flex items-center gap-2 truncate">
-              <CreditCard className="h-5 w-5 sm:h-6 sm:w-6 shrink-0" />
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-2xl text-blue-600 flex items-center gap-2">
+              <CreditCard className="h-6 w-6" />
               SUPPLIER CREDITS
             </CardTitle>
           </div>
@@ -1605,16 +1615,16 @@ const Credits = () => {
       </Card>
 
       {/* Filters */}
-      <Card className="overflow-hidden">
-        <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
-            <div className="min-w-0">
+      <Card>
+        <CardContent className="pt-6">
+          <div className="grid grid-cols-5 gap-4">
+            <div>
               <Label>Credit Type</Label>
               <Select
                 value={creditTypeFilter}
                 onValueChange={setCreditTypeFilter}
               >
-                <SelectTrigger className="h-10 mt-1.5">
+                <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1623,7 +1633,7 @@ const Credits = () => {
                 </SelectContent>
               </Select>
             </div>
-            <div className="min-w-0">
+            <div>
               <Label>Search</Label>
               <div className="relative">
                 <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1631,17 +1641,17 @@ const Credits = () => {
                   placeholder={creditTypeFilter === "po" ? "Search by PO number..." : "Search by customer name or bill number..."}
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="pl-8 h-10 mt-1.5"
+                  className="pl-8"
                 />
               </div>
             </div>
-            <div className="min-w-0">
+            <div>
               <Label>Status</Label>
               <Select
                 value={statusFilter || "all"}
                 onValueChange={(value) => setStatusFilter(value === "all" ? "" : value)}
               >
-                <SelectTrigger className="h-10 mt-1.5">
+                <SelectTrigger>
                   <SelectValue placeholder="All Status" />
                 </SelectTrigger>
                 <SelectContent>
@@ -1653,13 +1663,13 @@ const Credits = () => {
               </Select>
             </div>
             {creditTypeFilter === "po" && (
-              <div className="min-w-0">
+              <div>
                 <Label>Supplier</Label>
                 <Select
                   value={supplierFilter || "all"}
                   onValueChange={(value) => setSupplierFilter(value === "all" ? "" : value)}
                 >
-                  <SelectTrigger className="h-10 mt-1.5">
+                  <SelectTrigger>
                     <SelectValue placeholder="All Suppliers" />
                   </SelectTrigger>
                   <SelectContent>
@@ -1686,8 +1696,7 @@ const Credits = () => {
                 </Select>
               </div>
             )}
-            <div className="flex flex-col min-w-0">
-              <Label className="invisible h-5">Clear</Label>
+            <div className="flex items-end">
               <Button
                 variant="outline"
                 onClick={() => {
@@ -1695,7 +1704,7 @@ const Credits = () => {
                   setStatusFilter("");
                   setSupplierFilter("");
                 }}
-                className="w-full h-10 mt-1.5 shrink-0"
+                className="w-full"
               >
                 Clear Filters
               </Button>
@@ -1705,8 +1714,8 @@ const Credits = () => {
       </Card>
 
       {/* Credits Table */}
-      <Card className="overflow-hidden">
-        <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
+      <Card>
+        <CardContent className="pt-6">
           {selectedCredits.length > 0 && (
             <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
               <div>
@@ -1726,11 +1735,11 @@ const Credits = () => {
               </Button>
             </div>
           )}
-          <div className="overflow-x-auto min-w-0 -mx-1 sm:mx-0">
-            <Table className="w-full min-w-[640px]">
+          <div className="overflow-x-auto">
+            <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-10 sm:w-12 px-3 py-3 text-left align-middle">
+                  <TableHead className="w-12">
                     <input
                       type="checkbox"
                       checked={
@@ -1745,23 +1754,23 @@ const Credits = () => {
                   </TableHead>
                   {creditTypeFilter === "po" ? (
                     <>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">PO Number</TableHead>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Supplier</TableHead>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Order Date</TableHead>
+                      <TableHead>PO Number</TableHead>
+                      <TableHead>Supplier</TableHead>
+                      <TableHead>Order Date</TableHead>
                     </>
                   ) : (
                     <>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">Bill Number</TableHead>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Customer</TableHead>
-                      <TableHead className="px-3 py-3 text-left align-middle min-w-[100px]">Bill Date</TableHead>
+                      <TableHead>Bill Number</TableHead>
+                      <TableHead>Customer</TableHead>
+                      <TableHead>Bill Date</TableHead>
                     </>
                   )}
-                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Initial Amount</TableHead>
-                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Current Amount</TableHead>
-                  <TableHead className="px-3 py-3 text-right align-middle min-w-[90px]">Paid Amount</TableHead>
-                  <TableHead className="px-3 py-3 text-right align-middle min-w-[80px]">Balance</TableHead>
-                  <TableHead className="px-3 py-3 text-left align-middle min-w-[80px]">Status</TableHead>
-                  <TableHead className="px-3 py-3 text-left align-middle min-w-[90px]">
+                  <TableHead>Initial Amount</TableHead>
+                  <TableHead>Current Amount</TableHead>
+                  <TableHead>Paid Amount</TableHead>
+                  <TableHead>Balance</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>
                     <div className="flex items-center gap-2">
                       <span>Changes</span>
                       <Button
@@ -1797,7 +1806,7 @@ const Credits = () => {
                       </Button>
                     </div>
                   </TableHead>
-                  <TableHead className="px-3 py-3 text-right align-middle min-w-[100px]">Actions</TableHead>
+                  <TableHead>Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -1818,7 +1827,7 @@ const Credits = () => {
                 ) : (
                   (creditTypeFilter === "po" ? credits : customerCredits).map((credit) => (
                     <TableRow key={credit._id}>
-                      <TableCell className="px-3 py-3 align-middle w-10 sm:w-12">
+                      <TableCell>
                         {credit.status !== "paid" && (credit.balanceAmount || 0) > 0 && (
                           <input
                             type="checkbox"
@@ -1830,13 +1839,13 @@ const Credits = () => {
                       </TableCell>
                       {creditTypeFilter === "po" ? (
                         <>
-                          <TableCell className="font-medium px-3 py-3 text-left align-middle">
+                          <TableCell className="font-medium">
                             {credit.poNumber || credit.purchaseOrder?.poNumber || credit.po_number || 'N/A'}
                           </TableCell>
-                          <TableCell className="px-3 py-3 text-left align-middle">
+                          <TableCell>
                             {credit.supplierName || credit.supplier?.companyName || "N/A"}
                           </TableCell>
-                          <TableCell className="px-3 py-3 text-left align-middle whitespace-nowrap">
+                          <TableCell>
                             {credit.orderDate
                               ? format(new Date(credit.orderDate), "dd-MM-yyyy")
                               : "N/A"}
@@ -1844,20 +1853,20 @@ const Credits = () => {
                         </>
                       ) : (
                         <>
-                          <TableCell className="font-medium px-3 py-3 text-left align-middle">
+                          <TableCell className="font-medium">
                             {credit.billNumber || "N/A"}
                           </TableCell>
-                          <TableCell className="px-3 py-3 text-left align-middle">
+                          <TableCell>
                             {credit.customerName || "N/A"}
                           </TableCell>
-                          <TableCell className="px-3 py-3 text-left align-middle whitespace-nowrap">
+                          <TableCell>
                             {credit.billDate
                               ? format(new Date(credit.billDate), "dd-MM-yyyy")
                               : "N/A"}
                           </TableCell>
                         </>
                       )}
-                      <TableCell className="font-medium px-3 py-3 text-right align-middle">
+                      <TableCell className="font-medium">
                         {(() => {
                           // Initial Amount should ALWAYS show the original PO amount (never changes)
                           // This is the amount from the PO before any edits
@@ -1892,21 +1901,21 @@ const Credits = () => {
                           return `₹${Math.round(initialAmount)}`;
                         })()}
                       </TableCell>
-                      <TableCell className="font-medium px-3 py-3 text-right align-middle">
+                      <TableCell className="font-medium">
                         {(() => {
                           // Current Amount shows the edited/updated amount (originalAmount)
                           const currentAmount = credit.originalAmount || 0;
                           return `₹${Math.round(currentAmount)}`;
                         })()}
                       </TableCell>
-                      <TableCell className="px-3 py-3 text-right align-middle">
+                      <TableCell>
                         ₹{Math.round(credit.paidAmount || 0)}
                       </TableCell>
-                      <TableCell className="font-semibold text-blue-600 px-3 py-3 text-right align-middle">
+                      <TableCell className="font-semibold text-blue-600">
                         ₹{Math.round(credit.balanceAmount || 0)}
                       </TableCell>
-                      <TableCell className="px-3 py-3 text-left align-middle">{getStatusBadge(credit.status)}</TableCell>
-                      <TableCell className="px-3 py-3 text-left align-middle">
+                      <TableCell>{getStatusBadge(credit.status)}</TableCell>
+                      <TableCell>
                         {(() => {
                           // Calculate initial amount using the same logic as Initial Amount column
                           let initialAmount = 0;
@@ -1945,8 +1954,8 @@ const Credits = () => {
                           );
                         })()}
                       </TableCell>
-                      <TableCell className="px-3 py-3 text-right align-middle">
-                        <div className="flex gap-2 justify-end flex-wrap">
+                      <TableCell>
+                        <div className="flex gap-2">
                           {creditTypeFilter === "billing" && (
                             <Button
                               variant="outline"
@@ -2171,104 +2180,200 @@ const Credits = () => {
 
       {/* Billing Credit Detail Dialog */}
       <Dialog open={detailDialogOpen} onOpenChange={setDetailDialogOpen}>
-        <DialogContent className="max-w-[95vw] w-[95vw] h-[90vh]">
+        <DialogContent className="inset-0 left-0 top-0 translate-x-0 translate-y-0 w-screen max-w-none h-screen max-h-none rounded-none p-0 gap-0 sm:max-w-none sm:w-screen sm:h-screen sm:rounded-none sm:p-0">
           <DialogHeader>
-            <DialogTitle>Bill Credit Details</DialogTitle>
+            <div className="px-6 py-4 border-b bg-background sticky top-0 z-10">
+              <DialogTitle>Bill Credit Details</DialogTitle>
+            </div>
           </DialogHeader>
           {detailLoading ? (
             <div className="py-10 text-center text-muted-foreground">Loading bill items...</div>
           ) : (
             <>
-              <div className="grid grid-cols-2 gap-4 p-4 bg-muted rounded-lg">
+              <div className="h-[calc(100vh-140px)] overflow-y-auto px-6 py-4 space-y-4">
+              <div className="rounded-lg border bg-card">
+                <div className="border-b px-4 py-3">
+                  <h3 className="text-sm font-semibold">Bill Header</h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 p-4 bg-muted/40">
+                <div>
+                  <Label className="text-xs text-muted-foreground">Store</Label>
+                  <p className="font-medium">{selectedStore?.name || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">State Code</Label>
+                  <p className="font-medium">
+                    {selectedStore?.stateCode || selectedStore?.addressStateCode || "33"}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Place Of Supply</Label>
+                  <p className="font-medium">
+                    {selectedStore?.placeOfSupply || selectedStore?.addressState || selectedStore?.address?.state || "TamilNadu"}
+                  </p>
+                </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Bill Number</Label>
-                  <p className="font-medium">{detailBill?.billNo || detailBill?.billNumber || "N/A"}</p>
+                  <p className="font-medium">{detailBill?.billNo || detailBill?.billNumber || selectedCredit?.billNumber || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Bill Date</Label>
+                  <p className="font-medium">
+                    {detailBill?.date ? format(new Date(detailBill.date), "dd-MM-yyyy") : "N/A"}
+                  </p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Invoice Type</Label>
+                  <p className="font-medium">{selectedCredit?.invoiceType || "GST Invoice"}</p>
                 </div>
                 <div>
                   <Label className="text-xs text-muted-foreground">Customer</Label>
-                  <p className="font-medium">{detailBill?.customerName || "N/A"}</p>
+                  <p className="font-medium">{selectedCredit?.customerName || detailBill?.customerName || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Customer Phone</Label>
+                  <p className="font-medium">{selectedCredit?.customerPhone || detailBill?.customerPhone || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Customer GSTIN</Label>
+                  <p className="font-medium">{selectedCredit?.customerGstin || detailBill?.customerGstin || "N/A"}</p>
+                </div>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Payment Method</Label>
+                  <p className="font-medium uppercase">{detailBill?.paymentMethod || "N/A"}</p>
+                </div>
+                <div className="md:col-span-2 xl:col-span-5">
+                  <Label className="text-xs text-muted-foreground">Customer Address</Label>
+                  <p className="font-medium break-words">
+                    {selectedCredit?.customerAddress || detailBill?.customerAddress || "N/A"}
+                  </p>
                 </div>
               </div>
+              </div>
 
-              <div className="overflow-auto border rounded max-h-[60vh]">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/60">
-                    <tr>
-                      <th className="p-2 text-left">S.No</th>
-                      <th className="p-2 text-left">Item</th>
-                      <th className="p-2 text-left">HSN/SAC</th>
-                      <th className="p-2 text-center">Qty</th>
-                      <th className="p-2 text-right">GST %</th>
-                      <th className="p-2 text-right">Price</th>
-                      <th className="p-2 text-right">Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {detailItems.map((it, idx) => (
-                      <tr key={it._key} className="border-t">
-                        <td className="p-2">{idx + 1}</td>
-                        <td className="p-2">
-                          <div className="font-medium">{it.itemName}</div>
-                          {(it.hsnCode || it.hsnId) ? <div className="text-xs text-muted-foreground">HSN/SAC: {it.hsnCode || it.hsnId}</div> : null}
-                        </td>
-                        <td className="p-2">
-                          <Input
-                            type="text"
-                            value={it.hsnCode || ""}
-                            onChange={(e) => handleDetailItemHsnChange(it._key, e.target.value)}
-                            className="h-8 w-28"
-                            placeholder="HSN"
-                          />
-                        </td>
-                        <td className="p-2 text-center">
-                          <Input
-                            type="number"
-                            step="1"
-                            min="0"
-                            value={it.quantity}
-                            onChange={(e) => handleDetailItemQtyChange(it._key, e.target.value)}
-                            className="h-8 w-24 mx-auto text-center"
-                          />
-                        </td>
-                        <td className="p-2 text-right">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={it.taxRate}
-                            onChange={(e) => handleDetailItemGstChange(it._key, e.target.value)}
-                            className="h-8 w-24 ml-auto text-right"
-                          />
-                        </td>
-                        <td className="p-2 text-right">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={it.unitPrice}
-                            onChange={(e) => handleDetailItemPriceChange(it._key, e.target.value)}
-                            className="h-8 w-28 ml-auto text-right"
-                          />
-                        </td>
-                        <td className="p-2 text-right">
-                          {formatCurrency(Number(it.quantity) * Number(it.unitPrice))}
-                        </td>
-                      </tr>
-                    ))}
-                    {detailItems.length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="p-4 text-center text-muted-foreground">No items</td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div className="rounded-lg border bg-card">
+                <div className="border-b px-4 py-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold">Items</h3>
+                  <span className="text-xs text-muted-foreground">
+                    {detailItems.length} {detailItems.length === 1 ? "item" : "items"}
+                  </span>
+                </div>
+                <div className="space-y-3 p-3">
+                {detailItems.map((it, idx) => (
+                  <div key={it._key} className="rounded-lg border bg-background p-4 space-y-4">
+                    <div className="rounded-md border bg-muted/30 overflow-hidden">
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 px-4 py-2 text-[11px] font-medium text-muted-foreground border-b bg-muted/50">
+                        <div className="whitespace-nowrap">Item Name</div>
+                        <div className="whitespace-nowrap">Code</div>
+                        <div className="whitespace-nowrap">Batch</div>
+                        <div className="whitespace-nowrap">MRP</div>
+                        <div className="text-right whitespace-nowrap">Line Total</div>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 px-4 py-3 text-sm">
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-1">Item #{idx + 1}</p>
+                          <p className="font-semibold break-words">{it.itemName || "Item"}</p>
+                        </div>
+                        <div className="font-medium">{it.itemCode || "-"}</div>
+                        <div className="font-medium">{it.batch || "-"}</div>
+                        <div className="font-medium">{formatCurrency(it.mrp || 0)}</div>
+                        <div className="font-semibold text-right">{formatCurrency(Number(it.total || 0))}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-5 gap-3 rounded-md bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                      <div className="whitespace-nowrap">HSN/SAC</div>
+                      <div className="whitespace-nowrap">Quantity</div>
+                      <div className="whitespace-nowrap">GST %</div>
+                      <div className="whitespace-nowrap">Price</div>
+                      <div className="whitespace-nowrap">Discount</div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                      <div className="space-y-1">
+                        <Input
+                          type="text"
+                          value={it.hsnCode || ""}
+                          onChange={(e) => handleDetailItemHsnChange(it._key, e.target.value)}
+                          className="h-9"
+                          placeholder="HSN"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Input
+                          type="number"
+                          step="1"
+                          min="0"
+                          value={it.quantity}
+                          onChange={(e) => handleDetailItemQtyChange(it._key, e.target.value)}
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={it.taxRate}
+                          onChange={(e) => handleDetailItemGstChange(it._key, e.target.value)}
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={it.unitPrice}
+                          onChange={(e) => handleDetailItemPriceChange(it._key, e.target.value)}
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <div className="h-9 rounded-md border bg-muted px-3 flex items-center justify-end text-sm">
+                          {formatCurrency(it.discount || 0)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 rounded-md bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
+                      <div className="whitespace-nowrap">Sub Total</div>
+                      <div className="whitespace-nowrap">GST Amount</div>
+                      <div className="whitespace-nowrap">MRP</div>
+                      <div className="whitespace-nowrap">Total</div>
+                    </div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+                      <div className="rounded-md border bg-muted/40 p-3">
+                        <div className="font-medium">{formatCurrency(it.subtotal || 0)}</div>
+                      </div>
+                      <div className="rounded-md border bg-muted/40 p-3">
+                        <div className="font-medium">
+                          {formatCurrency(((Number(it.subtotal || 0) - Number(it.discount || 0)) * Number(it.taxRate || 0)) / 100)}
+                        </div>
+                      </div>
+                      <div className="rounded-md border bg-muted/40 p-3">
+                        <div className="font-medium">{formatCurrency(it.mrp || 0)}</div>
+                      </div>
+                      <div className="rounded-md border bg-muted/40 p-3">
+                        <div className="font-medium">{formatCurrency(Number(it.total || 0))}</div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                {detailItems.length === 0 && (
+                  <div className="p-4 text-center text-muted-foreground">No items</div>
+                )}
+                </div>
               </div>
 
               {(() => {
                 const { summary } = recalcDetailTotals(detailItems);
                 return (
-                  <div className="grid grid-cols-2 gap-4 mt-4">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4">
                     <div>
+                      <h3 className="text-sm font-semibold mb-2">Notes</h3>
                       <Label className="mb-1 block">Notes (optional)</Label>
                       <Textarea
                         value={detailNotes}
@@ -2277,7 +2382,8 @@ const Credits = () => {
                         placeholder="Add notes for this change..."
                       />
                     </div>
-                    <div className="border rounded p-3">
+                    <div className="border rounded p-3 bg-card">
+                      <h3 className="text-sm font-semibold mb-3">Amount Summary</h3>
                       <div className="flex justify-between py-1">
                         <span>Sub Total</span>
                         <strong>{formatCurrency(summary.subtotal)}</strong>
@@ -2338,9 +2444,10 @@ const Credits = () => {
                   </div>
                 );
               })()}
+              </div>
             </>
           )}
-          <DialogFooter className="justify-between">
+          <DialogFooter className="justify-between px-6 py-4 border-t bg-background">
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => setDetailDialogOpen(false)}>
                 Close

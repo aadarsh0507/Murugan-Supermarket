@@ -11,7 +11,7 @@ import {
   verifyResetPasswordOTP,
   clearResetPasswordOTP
 } from '../repositories/userRepository.js';
-import { generateToken, resolveJwtExpiresIn, jwtExpiryToMs, resolveUserScreenIds } from '../middleware/auth.js';
+import { generateToken, resolveJwtExpiresIn, jwtExpiryToMs } from '../middleware/auth.js';
 import { sendOTPEmail } from '../utils/emailService.js';
 
 const parsedSaltRounds = parseInt(process.env.BCRYPT_ROUNDS, 10);
@@ -244,7 +244,7 @@ export const register = async (req, res) => {
 
     const token = generateToken(user.id);
     const registerExpiresIn = resolveJwtExpiresIn();
-    const registerCookieMaxAge = jwtExpiryToMs(registerExpiresIn);
+    const registerCookieMaxAge = registerExpiresIn ? jwtExpiryToMs(registerExpiresIn) : null;
     const safeUser = sanitizeUserResponse(user);
 
     res.cookie('token', token, {
@@ -252,7 +252,7 @@ export const register = async (req, res) => {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: registerCookieMaxAge
+      ...(registerCookieMaxAge ? { maxAge: registerCookieMaxAge } : {})
     });
 
     res.status(201).json({
@@ -317,21 +317,11 @@ export const login = async (req, res) => {
       });
     }
 
-    if (!user.isAdmin && !user.is_admin) {
-      const screenIds = resolveUserScreenIds(user);
-      if (!Array.isArray(screenIds) || screenIds.length === 0) {
-        return res.status(403).json({
-          status: 'error',
-          message: 'Screen access denied. Please contact your administrator.'
-        });
-      }
-    }
-
     await updateUserLastLogin(user.id);
 
     const expiresIn = resolveJwtExpiresIn({ rememberMe });
     const token = generateToken(user.id, { rememberMe });
-    const cookieMaxAge = jwtExpiryToMs(expiresIn);
+    const cookieMaxAge = expiresIn ? jwtExpiryToMs(expiresIn) : null;
 
     const safeUser = sanitizeUserResponse(user);
 
@@ -340,7 +330,7 @@ export const login = async (req, res) => {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
-      maxAge: cookieMaxAge
+      ...(cookieMaxAge ? { maxAge: cookieMaxAge } : {})
     });
 
     res.json({

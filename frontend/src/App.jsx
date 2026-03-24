@@ -150,7 +150,7 @@ const App = () => (
             <Route
               path="/select-store"
               element={
-                <ProtectedRoute skipStoreCheck={true} screenId={SCREEN_KEY_TO_ID["select-store"]}>
+                <ProtectedRoute skipStoreCheck={true}>
                   <Layout><SelectStore /></Layout>
                 </ProtectedRoute>
               }

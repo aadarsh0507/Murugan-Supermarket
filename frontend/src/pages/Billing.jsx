@@ -44,12 +44,16 @@ const STORAGE_KEY = "billingTabsState.v1";
 const MAX_BILL_TABS = 5;
 const PAYMENT_METHODS = [
   { value: "cash", label: "Cash" },
-  { value: "card", label: "Card" },
   { value: "upi", label: "UPI" },
   { value: "credit", label: "Credit" },
-  { value: "online", label: "Online" },
-  { value: "other", label: "Other" },
 ];
+
+const ALLOWED_PAYMENT_METHODS = new Set(PAYMENT_METHODS.map((method) => method.value));
+
+const normalizePaymentMethod = (value) => {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return ALLOWED_PAYMENT_METHODS.has(normalized) ? normalized : "cash";
+};
 
 const RECENT_BILLS_KEY = "billingRecentBills.v1";
 
@@ -119,7 +123,7 @@ const buildBillDraft = (index) => {
     customerEmail: "",
     customerAddress: "",
     customerGstin: "",
-    paymentMethod: "upi",
+    paymentMethod: "cash",
     paymentStatus: "paid",
     discount: "0",
     tax: "0",
@@ -247,7 +251,7 @@ const loadSavedState = () => {
     const loadedBills = parsed.bills.map((bill, index) => ({
       ...buildBillDraft(index + 1),
       ...bill,
-      paymentMethod: bill.paymentMethod || "upi",
+      paymentMethod: normalizePaymentMethod(bill.paymentMethod),
       items: Array.isArray(bill.items)
         ? bill.items.map((line) => ({
             lineId: line.lineId || `line-${createId()}`,
@@ -2530,7 +2534,7 @@ export default function Billing() {
               </Card>
             )}
 
-            {/* Payment Method – all terms: Cash, Card, UPI, Credit, Online, Other */}
+            {/* Payment Method */}
             <Card>
               <CardHeader>
                 <CardTitle className="text-lg">Payment Method</CardTitle>
@@ -2539,7 +2543,7 @@ export default function Billing() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Payment Method</label>
                   <Select
-                    value={activeBill?.paymentMethod ?? "upi"}
+                    value={normalizePaymentMethod(activeBill?.paymentMethod)}
                     onValueChange={(value) => updateBill(activeBillId, { paymentMethod: value, paymentStatus: value === "credit" ? "pending" : "paid", ...(value !== "online" && value !== "upi" ? { transactionId: "" } : {}) })}
                   >
                     <SelectTrigger className="w-full">

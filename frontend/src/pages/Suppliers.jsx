@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import { 
   Plus, 
@@ -38,6 +38,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { suppliersAPI } from "@/services/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 const getStoreIdValue = (store) => {
   if (!store || typeof store !== "object") {
@@ -92,15 +93,35 @@ const extractStoreIdsFromSupplier = (supplier) => {
 
 const Suppliers = () => {
   const { toast } = useToast();
+  const { selectedStore } = useAuth();
   const [suppliers, setSuppliers] = useState([]);
   const [stores, setStores] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [togglingSupplierId, setTogglingSupplierId] = useState(null);
   const [editingSupplier, setEditingSupplier] = useState(null);
   const [currentScreen, setCurrentScreen] = useState("list"); // 'list', 'supplier', 'stores'
   const [currentSupplier, setCurrentSupplier] = useState(null);
+  const selectedStoreId = useMemo(
+    () => selectedStore?._id ?? selectedStore?.id ?? selectedStore?.storeId ?? null,
+    [selectedStore]
+  );
+  const selectedStoreIdString = useMemo(
+    () =>
+      selectedStoreId !== null && selectedStoreId !== undefined
+        ? String(selectedStoreId)
+        : null,
+    [selectedStoreId]
+  );
+  const formStores = useMemo(
+    () =>
+      selectedStoreIdString
+        ? stores.filter((store) => getStoreIdValue(store) === selectedStoreIdString)
+        : [],
+    [stores, selectedStoreIdString]
+  );
 
   // Form data
   const [formData, setFormData] = useState({
@@ -140,13 +161,16 @@ const Suppliers = () => {
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [selectedStoreId]);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const [suppliersRes, storesRes] = await Promise.all([
-        suppliersAPI.getSuppliers({ limit: 100 }),
+        suppliersAPI.getSuppliers({
+          limit: 100,
+          ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+        }),
         suppliersAPI.getStores({ isActive: true })
       ]);
       
@@ -178,6 +202,39 @@ const Suppliers = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleToggleSupplierStatus = async (supplier) => {
+    const supplierId = supplier?._id ?? supplier?.id;
+    if (!supplierId) return;
+
+    setTogglingSupplierId(String(supplierId));
+    try {
+      const response = await suppliersAPI.toggleSupplierStatus(supplierId);
+      const updatedSupplier = response?.data ?? {};
+      const nextStatus = Boolean(updatedSupplier.isActive);
+
+      setSuppliers((prev) =>
+        prev.map((item) =>
+          String(item._id ?? item.id) === String(supplierId)
+            ? { ...item, isActive: nextStatus }
+            : item
+        )
+      );
+
+      toast({
+        title: "Success",
+        description: `Supplier ${nextStatus ? "activated" : "deactivated"} successfully`,
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update supplier status",
+        variant: "destructive",
+      });
+    } finally {
+      setTogglingSupplierId(null);
     }
   };
 
@@ -220,7 +277,7 @@ const Suppliers = () => {
       isActive: true,
       notes: ""
     });
-    setSelectedStores([]);
+    setSelectedStores(selectedStoreIdString ? [selectedStoreIdString] : []);
     setCurrentScreen("supplier");
   };
 
@@ -271,6 +328,15 @@ const Suppliers = () => {
     setSaving(true);
     
     try {
+      if (!selectedStoreIdString) {
+        toast({
+          title: "Store Required",
+          description: "Please select a store before saving a supplier",
+          variant: "destructive",
+        });
+        return;
+      }
+
       const sanitizePayload = (payload) => {
         return Object.entries(payload).reduce((acc, [key, value]) => {
           if (value === undefined || value === null) {
@@ -313,13 +379,11 @@ const Suppliers = () => {
         isActive: formData.isActive ? 1 : 0,
       });
 
-      // Include store_id in payload (using first selected store as primary)
-      const primaryStoreId = selectedStores.length > 0 
-        ? normalizeStoreIdForApi(selectedStores[0]) 
-        : null;
+      const scopedStoreIds = [selectedStoreIdString];
+      const primaryStoreId = normalizeStoreIdForApi(scopedStoreIds[0]);
       
-      // Normalize all selected store IDs for the stores array
-      const normalizedStoreIds = selectedStores
+      // Save supplier only under the currently selected store
+      const normalizedStoreIds = scopedStoreIds
         .map(storeId => {
           const normalized = normalizeStoreIdForApi(storeId);
           // Ensure we have a valid number
@@ -333,7 +397,7 @@ const Suppliers = () => {
         })
         .filter(storeId => storeId !== null && storeId !== undefined);
       
-      console.log('[Suppliers] Selected stores (raw):', selectedStores);
+      console.log('[Suppliers] Selected stores (raw):', scopedStoreIds);
       console.log('[Suppliers] Normalized store IDs:', normalizedStoreIds);
       console.log('[Suppliers] Primary store ID to save:', primaryStoreId);
       
@@ -766,23 +830,21 @@ const Suppliers = () => {
               <div className="space-y-4">
                 <h3 className="text-lg font-semibold flex items-center gap-2">
                   <Store className="h-5 w-5" />
-                  Assign Stores
+                  Assigned Store
                 </h3>
                 <div>
-                  <Label>Select Stores</Label>
+                  <Label>Current Store</Label>
                   <div className="mt-2 space-y-2 max-h-48 overflow-y-auto border rounded-lg p-4">
-                    {stores.length === 0 ? (
+                    {formStores.length === 0 ? (
                       <p className="text-sm text-muted-foreground text-center py-8">
-                        No stores available. Please add stores from the Stores page.
+                        No selected store available. Please choose a store first.
                       </p>
                     ) : (
-                      stores.map((store, index) => {
+                      formStores.map((store, index) => {
                         const storeIdValue = getStoreIdValue(store);
                         const storeKey = storeIdValue ?? `store-${index}`;
                         const checkboxId = `store-${storeKey}`;
-                        const isChecked = storeIdValue
-                          ? selectedStores.includes(storeIdValue)
-                          : false;
+                        const isChecked = storeIdValue === selectedStoreIdString;
 
                         return (
                           <div key={storeKey} className="flex items-center space-x-2">
@@ -790,26 +852,13 @@ const Suppliers = () => {
                               type="checkbox"
                               id={checkboxId}
                               checked={isChecked}
-                              onChange={(e) => {
-                                if (!storeIdValue) {
-                                  return;
-                                }
-                                setSelectedStores((prev) => {
-                                  if (e.target.checked) {
-                                    if (prev.includes(storeIdValue)) {
-                                      return prev;
-                                    }
-                                    return [...prev, storeIdValue];
-                                  }
-                                  return prev.filter((id) => id !== storeIdValue);
-                                });
-                              }}
+                              readOnly
                               className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
-                              disabled={!storeIdValue}
+                              disabled
                             />
                             <Label 
                               htmlFor={checkboxId}
-                              className="flex items-center gap-2 cursor-pointer flex-1"
+                              className="flex items-center gap-2 flex-1"
                             >
                               <span className="font-medium">{store.name}</span>
                               <span className="text-sm text-muted-foreground">({store.code})</span>
@@ -819,9 +868,9 @@ const Suppliers = () => {
                       })
                     )}
                   </div>
-                  {selectedStores.length > 0 && (
+                  {selectedStoreIdString && (
                     <p className="text-sm text-muted-foreground mt-2">
-                      {selectedStores.length} {selectedStores.length === 1 ? 'store' : 'stores'} selected
+                      Supplier will be saved only for the currently selected store.
                     </p>
                   )}
                 </div>
@@ -981,7 +1030,7 @@ const Suppliers = () => {
         <div>
           <h1 className="text-3xl font-bold">Supplier Master</h1>
           <p className="text-muted-foreground">
-            Manage your suppliers and their store associations
+            Manage suppliers for {selectedStore?.name || "the selected store"}
           </p>
         </div>
         <Button onClick={handleAddNew}>
@@ -1118,6 +1167,18 @@ const Suppliers = () => {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleToggleSupplierStatus(supplier)}
+                          disabled={togglingSupplierId === String(supplier._id ?? supplier.id)}
+                        >
+                          {supplier.isActive ? (
+                            <X className="h-4 w-4" />
+                          ) : (
+                            <Check className="h-4 w-4" />
+                          )}
+                        </Button>
                         <Button
                           size="sm"
                           variant="outline"

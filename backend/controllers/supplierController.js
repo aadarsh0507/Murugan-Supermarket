@@ -216,6 +216,32 @@ const ensureStoreIdColumn = async () => {
     }
 };
 
+const ensureSupplierIsActiveColumn = async () => {
+    try {
+        const columns = await query(`
+            SELECT COLUMN_NAME 
+            FROM information_schema.COLUMNS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+              AND TABLE_NAME = 'Suppliers' 
+              AND COLUMN_NAME = 'isActive'
+        `);
+
+        if (columns.length === 0) {
+            console.log('[Suppliers] Adding isActive column to Suppliers table...');
+            await query(`
+                ALTER TABLE Suppliers
+                ADD COLUMN isActive TINYINT(1) NOT NULL DEFAULT 1 AFTER MANUFACTURE
+            `);
+            console.log('[Suppliers] isActive column added successfully');
+            supplierColumnMapCache = null;
+        }
+    } catch (error) {
+        if (error.message && !error.message.includes('Duplicate column name')) {
+            console.warn('[Suppliers] Error ensuring isActive column:', error.message);
+        }
+    }
+};
+
 const getSupplierColumnMap = async () => {
     if (supplierColumnMapCache) {
         return supplierColumnMapCache;
@@ -334,9 +360,11 @@ const buildPayload = (body, columnMap) => {
 
 export const listSuppliers = async (req, res) => {
     try {
-        const { search, limit = 100 } = req.query;
+        const { search, limit = 100, storeId } = req.query;
         const searchTerm = typeof search === 'string' ? search.trim() : undefined;
         const limitValue = Math.min(Number.parseInt(limit, 10) || 100, 1000);
+        const normalizedStoreId = Number(storeId);
+        const hasStoreFilter = Number.isInteger(normalizedStoreId) && normalizedStoreId > 0;
 
         // First, let's check what tables exist
         try {
@@ -350,6 +378,10 @@ export const listSuppliers = async (req, res) => {
         } catch (tableListError) {
             console.warn('[Suppliers] Could not list tables:', tableListError.message);
         }
+
+        // Ensure required supplier columns exist before querying suppliers
+        await ensureStoreIdColumn();
+        await ensureSupplierIsActiveColumn();
 
         // Try different table names
         const possibleTableNames = ['Suppliers', 'suppliers'];
@@ -367,12 +399,16 @@ export const listSuppliers = async (req, res) => {
                 console.log(`[Suppliers] Found table: ${tableName}`);
 
                 // Get table structure to understand columns
+                let columnNames = [];
                 try {
                     const columns = await query(`DESCRIBE \`${tableName}\``);
-                    console.log(`[Suppliers] Table columns:`, columns.map(c => c.Field).join(', '));
+                    columnNames = columns.map((c) => c.Field);
+                    console.log(`[Suppliers] Table columns:`, columnNames.join(', '));
                 } catch (descError) {
                     console.warn('[Suppliers] Could not describe table:', descError.message);
                 }
+
+                const hasIsActiveColumn = columnNames.some((column) => column.toLowerCase() === 'isactive');
 
                 // Table exists, now query it - use correct column name SUPPLIERCODE
                 let sql = `SELECT 
@@ -390,6 +426,7 @@ export const listSuppliers = async (req, res) => {
                     COUNTRY,
                     MANUFACTURE,
                     store_id,
+                    ${hasIsActiveColumn ? 'isActive' : '1'} AS isActive,
                     \`SUPPLIERCODE\` AS id,
                     \`SUPPLIERCODE\` AS _id
                     FROM \`${tableName}\``;
@@ -401,6 +438,19 @@ export const listSuppliers = async (req, res) => {
                     conditions.push('(NAME LIKE ? OR PHONENO LIKE ?)');
                     const likeValue = `%${searchTerm}%`;
                     params.push(likeValue, likeValue);
+                }
+
+                if (hasStoreFilter) {
+                    conditions.push(`(
+                        store_id = ?
+                        OR EXISTS (
+                            SELECT 1
+                            FROM supplier_stores ss
+                            WHERE ss.supplier_id = \`SUPPLIERCODE\`
+                              AND ss.store_id = ?
+                        )
+                    )`);
+                    params.push(normalizedStoreId, normalizedStoreId);
                 }
 
                 if (conditions.length > 0) {
@@ -454,9 +504,6 @@ export const listSuppliers = async (req, res) => {
             });
         }
 
-        // Ensure store_id column exists
-        await ensureStoreIdColumn();
-        
         // Fetch store associations from supplier_stores table
         const supplierCodes = suppliers.map(s => s.Suppliercode || s.id || s._id).filter(Boolean);
         let storeAssociations = {};
@@ -469,7 +516,7 @@ export const listSuppliers = async (req, res) => {
                 // Fetch all store associations for these suppliers
                 const placeholders = supplierCodes.map(() => '?').join(',');
                 const storeRows = await query(
-                    `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.code as storeCode
+                    `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.store_code as storeCode
                      FROM supplier_stores ss
                      LEFT JOIN stores s ON ss.store_id = s.id
                      WHERE ss.supplier_id IN (${placeholders})`,
@@ -526,7 +573,7 @@ export const listSuppliers = async (req, res) => {
                 Citycode: supplier.Citycode || supplier.CITY || '',
                 State: supplier.State || supplier.STATE || '',
                 Pincode: supplier.Pincode || supplier.PINCODE || '',
-                isActive: 1, // Default to active
+                isActive: supplier.isActive ?? 1,
                 store_id: storeId, // Include store_id from Suppliers table
                 stores: supplierStores, // Include stores from supplier_stores table
                 // Add fields expected by frontend
@@ -613,7 +660,7 @@ export const getSupplierByCode = async (req, res) => {
         let supplierStores = [];
         try {
             const storeRows = await query(
-                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.code as storeCode
+                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.store_code as storeCode
                  FROM supplier_stores ss
                  LEFT JOIN stores s ON ss.store_id = s.id
                  WHERE ss.supplier_id = ?`,
@@ -666,6 +713,15 @@ const parseBoolean = (value) => {
 
     if (typeof value === 'boolean') {
         return value;
+    }
+
+    if (typeof value === 'number') {
+        if (value === 1) {
+            return true;
+        }
+        if (value === 0) {
+            return false;
+        }
     }
 
     if (typeof value === 'string') {
@@ -951,8 +1007,9 @@ export const createSupplier = async (req, res) => {
     if (respondValidationErrors(req, res)) return;
 
     try {
-        // Ensure store_id column exists before processing
+        // Ensure required supplier columns exist before processing
         await ensureStoreIdColumn();
+        await ensureSupplierIsActiveColumn();
         
         const columnMap = await getSupplierColumnMap();
         const payload = buildPayload(req.body, columnMap);
@@ -1026,7 +1083,7 @@ export const createSupplier = async (req, res) => {
                     const placeholders = storeValues.map(() => '(?, ?)').join(', ');
                     const flatValues = storeValues.flat();
                     await query(
-                        `INSERT INTO supplier_stores (supplier_id, store_id) VALUES ${placeholders}`,
+                        `INSERT INTO supplier_stores (supplier_id, store_id, created_at, updated_at) VALUES ${storeValues.map(() => '(?, ?, NOW(), NOW())').join(', ')}`,
                         flatValues
                     );
                 }
@@ -1039,7 +1096,7 @@ export const createSupplier = async (req, res) => {
         let supplierStores = [];
         try {
             const storeRows = await query(
-                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.code as storeCode
+                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.store_code as storeCode
                  FROM supplier_stores ss
                  LEFT JOIN stores s ON ss.store_id = s.id
                  WHERE ss.supplier_id = ?`,
@@ -1091,8 +1148,9 @@ export const updateSupplier = async (req, res) => {
         console.log('[UpdateSupplier] Request body stores:', req.body.stores);
         console.log('[UpdateSupplier] Request body stores type:', typeof req.body.stores, Array.isArray(req.body.stores));
         
-        // Ensure store_id column exists before processing
+        // Ensure required supplier columns exist before processing
         await ensureStoreIdColumn();
+        await ensureSupplierIsActiveColumn();
         
         const supplierCode = Number(req.params.supplierCode);
 
@@ -1187,9 +1245,8 @@ export const updateSupplier = async (req, res) => {
                     console.log(`[UpdateSupplier] Valid store values to insert:`, storeValues);
 
                     if (storeValues.length > 0) {
-                        const placeholders = storeValues.map(() => '(?, ?)').join(', ');
                         const flatValues = storeValues.flat();
-                        const insertSql = `INSERT INTO supplier_stores (supplier_id, store_id) VALUES ${placeholders}`;
+                        const insertSql = `INSERT INTO supplier_stores (supplier_id, store_id, created_at, updated_at) VALUES ${storeValues.map(() => '(?, ?, NOW(), NOW())').join(', ')}`;
                         console.log(`[UpdateSupplier] Executing SQL: ${insertSql} with values:`, flatValues);
                         const insertResult = await query(insertSql, flatValues);
                         console.log(`[UpdateSupplier] Successfully inserted ${storeValues.length} store associations`, insertResult);
@@ -1236,7 +1293,7 @@ export const updateSupplier = async (req, res) => {
         try {
             console.log(`[UpdateSupplier] Fetching stores for supplier ${supplierCode} from supplier_stores table`);
             const storeRows = await query(
-                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.code as storeCode
+                `SELECT ss.supplier_id, ss.store_id, s.id as storeId, s.name as storeName, s.store_code as storeCode
                  FROM supplier_stores ss
                  LEFT JOIN stores s ON ss.store_id = s.id
                  WHERE ss.supplier_id = ?`,
@@ -1305,6 +1362,7 @@ export const updateSupplier = async (req, res) => {
 
 export const deleteSupplier = async (req, res) => {
     try {
+        await ensureSupplierIsActiveColumn();
         const supplierCode = Number(req.params.supplierCode);
 
         // Check if supplier exists
@@ -1334,6 +1392,73 @@ export const deleteSupplier = async (req, res) => {
         res.status(500).json({
             status: 'error',
             message: 'Server error while deleting supplier'
+        });
+    }
+};
+
+export const toggleSupplierStatus = async (req, res) => {
+    try {
+        const supplierCode = Number(req.params.supplierCode);
+        if (!Number.isInteger(supplierCode) || supplierCode <= 0) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid supplier code'
+            });
+        }
+
+        const existingRows = await query(
+            'SELECT * FROM Suppliers WHERE SUPPLIERCODE = ?',
+            [supplierCode]
+        );
+
+        if (existingRows.length === 0) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Supplier not found'
+            });
+        }
+
+        const columnMap = await getSupplierColumnMap();
+        const isActiveColumn = mapFieldToDbColumn('isActive', columnMap);
+
+        if (!isActiveColumn) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Supplier status field is not available'
+            });
+        }
+
+        const currentSupplier = existingRows[0];
+        const currentStatus = parseBoolean(currentSupplier[isActiveColumn]);
+        const nextStatus = currentStatus === undefined ? false : !currentStatus;
+
+        await query(
+            `UPDATE Suppliers SET \`${isActiveColumn}\` = ? WHERE SUPPLIERCODE = ?`,
+            [nextStatus ? 1 : 0, supplierCode]
+        );
+
+        const updatedRows = await query(
+            'SELECT * FROM Suppliers WHERE SUPPLIERCODE = ?',
+            [supplierCode]
+        );
+
+        const supplier = updatedRows[0];
+
+        res.json({
+            status: 'success',
+            message: `Supplier ${nextStatus ? 'activated' : 'deactivated'} successfully`,
+            data: {
+                _id: supplier.Suppliercode,
+                id: supplier.Suppliercode,
+                ...supplier,
+                isActive: nextStatus
+            }
+        });
+    } catch (error) {
+        console.error('Error toggling supplier status:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'Server error while updating supplier status'
         });
     }
 };
@@ -1407,7 +1532,7 @@ export const addStoreToSupplier = async (req, res) => {
 
             // Insert new association
             await query(
-                'INSERT INTO supplier_stores (supplier_id, store_id) VALUES (?, ?)',
+                'INSERT INTO supplier_stores (supplier_id, store_id, created_at, updated_at) VALUES (?, ?, NOW(), NOW())',
                 [supplierCode, normalizedStoreId]
             );
         } catch (storeError) {

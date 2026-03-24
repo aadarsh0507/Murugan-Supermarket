@@ -119,12 +119,73 @@ const normalizeScreenRights = (user = {}) => {
   };
 };
 
+const getStoreIdValue = (storeLike) => {
+  if (storeLike === null || storeLike === undefined) return null;
+  if (typeof storeLike === "object") {
+    return (
+      storeLike.id ??
+      storeLike._id ??
+      storeLike.storeId ??
+      storeLike.store_id ??
+      null
+    );
+  }
+  return storeLike;
+};
+
+const normalizeStoreId = (storeLike) => {
+  const value = getStoreIdValue(storeLike);
+  if (value === null || value === undefined) return null;
+  const normalized = String(value).trim();
+  return normalized || null;
+};
+
+const getAccessibleStoreIds = (user = {}) => {
+  if (!user || typeof user !== "object") {
+    return [];
+  }
+
+  const storeCandidates = [
+    ...(Array.isArray(user.stores) ? user.stores : []),
+    user.primaryStore,
+    user.store,
+    user.storeId,
+    user.store_id,
+  ];
+
+  return Array.from(
+    new Set(storeCandidates.map(normalizeStoreId).filter(Boolean))
+  );
+};
+
+const normalizeStoreAccess = (user = {}) => {
+  if (!user || typeof user !== "object") {
+    return user;
+  }
+
+  const isAdmin = Boolean(user.isAdmin ?? user.is_admin);
+  if (isAdmin) {
+    return user;
+  }
+
+  const accessibleStoreIds = getAccessibleStoreIds(user);
+  const selectedStoreId = normalizeStoreId(user.selectedStore);
+
+  return {
+    ...user,
+    selectedStore:
+      selectedStoreId && accessibleStoreIds.includes(selectedStoreId)
+        ? user.selectedStore
+        : null,
+  };
+};
+
 const mapPayloadUser = (payload = {}) => {
   if (!payload || typeof payload !== "object") return payload;
   if (!payload.user) return payload;
   return {
     ...payload,
-    user: normalizeScreenRights(payload.user),
+    user: normalizeStoreAccess(normalizeScreenRights(payload.user)),
   };
 };
 
@@ -176,12 +237,13 @@ const authReducer = (state, action) => {
       };
 
     case AUTH_ACTIONS.UPDATE_SELECTED_STORE:
+      const selectedStoreUser = normalizeStoreAccess({
+        ...state.user,
+        selectedStore: action.payload.selectedStore
+      });
       return {
         ...state,
-        user: {
-          ...state.user,
-          selectedStore: action.payload.selectedStore
-        },
+        user: selectedStoreUser,
         error: null,
       };
 
@@ -198,9 +260,10 @@ const authReducer = (state, action) => {
 
     case AUTH_ACTIONS.UPDATE_USER:
       const updatedUser = normalizeScreenRights(action.payload);
+      const mergedUser = normalizeStoreAccess({ ...state.user, ...updatedUser });
       return {
         ...state,
-        user: { ...state.user, ...updatedUser },
+        user: mergedUser,
         error: null,
       };
 
