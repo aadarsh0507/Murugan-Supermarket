@@ -10,6 +10,7 @@ import {
   deleteItem,
   toggleItemStatus,
   getItemByBarcode,
+  serveItemImage,
   uploadItemImage,
   getStockWithBatches
 } from '../controllers/itemController.js';
@@ -55,6 +56,8 @@ const handleItemImageUpload = (req, res, next) => {
     next();
   });
 };
+
+router.get('/image', serveItemImage);
 
 router.use(protect);
 
