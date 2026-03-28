@@ -1,10 +1,6 @@
 ### Frontend build stage
 FROM node:22-alpine AS frontend-builder
 
-# Update npm to fix CVE-2025-64756 (glob vulnerability)
-RUN npm install -g npm@latest --unsafe-perm && \
-    (npm cache clean --force || true)
-
 # Enable corepack for pnpm support
 RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
 
@@ -18,10 +14,6 @@ RUN pnpm run build
 
 ### Backend dependencies stage
 FROM node:22-alpine AS backend-builder
-
-# Update npm to fix CVE-2025-64756 (glob vulnerability)
-RUN npm install -g npm@latest --unsafe-perm && \
-    (npm cache clean --force || true)
 
 # Enable corepack for pnpm support
 RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
@@ -40,12 +32,6 @@ ENV NODE_ENV=production \
     PORT=5000
 
 WORKDIR /Super_Market
-
-# Update npm to latest (may include glob fixes)
-# Note: glob vulnerabilities in npm's dependencies are handled via .trivyignore
-# since they're in npm's internal deps and not used in production (we use pnpm)
-RUN npm install -g npm@latest --unsafe-perm && \
-    (npm cache clean --force || true)
 
 RUN apk add --no-cache nginx curl && \
     mkdir -p /var/log/nginx /run/nginx
