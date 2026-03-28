@@ -306,7 +306,7 @@ export const categoriesAPI = {
   },
 
   // Get category hierarchy (tree structure)
-  // Params: { store_id }
+  // Params: { store_id, include_inactive } — include_inactive shows inactive categories/subcategories
   getCategoryHierarchy: async (params = {}) => {
     const queryString = new URLSearchParams(params).toString();
     const endpoint = queryString ? `/categories/hierarchy?${queryString}` : '/categories/hierarchy';
@@ -374,7 +374,7 @@ export const categoriesAPI = {
 // Brands API
 export const brandsAPI = {
   // Get all brands
-  // Params: { limit, offset, q, store_id }
+  // Params: { limit, offset, q, store_id, subcategory_id, include_legacy, include_inactive }
   getBrands: async (params = {}) => {
     const queryString = new URLSearchParams(params).toString();
     const endpoint = queryString ? `/brands?${queryString}` : '/brands';

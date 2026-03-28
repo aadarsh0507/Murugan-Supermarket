@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
-import { Search, Package, Pencil, Loader2, ChevronDown, Check, ChevronLeft, ChevronRight, Barcode, Printer, Plus, X, ChevronRight as ChevronRightIcon } from "lucide-react";
+import { Search, Package, Pencil, Loader2, ChevronDown, Check, ChevronLeft, ChevronRight, Barcode, Printer, Plus, X, ChevronRight as ChevronRightIcon, Tag } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +27,27 @@ const EMPTY_STATE = {
 
 const DEFAULT_PAGE_SIZE = 100;
 const CRITICAL_STOCK_THRESHOLD = 5;
+
+/** Move focus to the next editable control in an item edit/create form (Enter key). */
+function focusNextFieldInForm(form, activeElement) {
+  const selector =
+    'input:not([type="hidden"]):not([type="file"]):not([disabled]):not([readonly]), textarea:not([disabled]), button[role="combobox"]:not([disabled])';
+  const fields = Array.from(form.querySelectorAll(selector));
+  const i = fields.indexOf(activeElement);
+  if (i === -1 || i >= fields.length - 1) return;
+  const next = fields[i + 1];
+  next.focus();
+  if (next.tagName === "INPUT" && typeof next.select === "function") {
+    const ty = next.type || "text";
+    if (["text", "search", "tel", "url", "number"].includes(ty)) {
+      try {
+        next.select();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
 
 const STOCK_STATUS_OPTIONS = [
   { value: "all", label: "All stock levels" },
@@ -103,7 +124,6 @@ export default function Items() {
   const [editBrandSearchTerm, setEditBrandSearchTerm] = useState("");
   const [showBrandCreation, setShowBrandCreation] = useState(false);
   const [newBrandInItemForm, setNewBrandInItemForm] = useState("");
-  const [newBrandInEditForm, setNewBrandInEditForm] = useState("");
   const [isCreateItemOpen, setIsCreateItemOpen] = useState(false);
   const [createItemForm, setCreateItemForm] = useState({
     name: "",
@@ -349,12 +369,25 @@ export default function Items() {
       }
     };
 
+    loadCategories();
+  }, [selectedStore]);
+
+  useEffect(() => {
     const loadBrands = async () => {
       try {
         const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
         const brandParams = { limit: 1000 };
         if (storeId) {
           brandParams.store_id = storeId;
+        }
+        const activeSubId = isCreateItemOpen
+          ? createItemForm.subcategoryId || null
+          : isEditOpen
+            ? editForm.subcategoryId || null
+            : null;
+        if (activeSubId) {
+          brandParams.subcategory_id = activeSubId;
+          brandParams.include_legacy = "true";
         }
         const brandsResponse = await brandsAPI.getBrands(brandParams);
         const fetchedBrands =
@@ -366,10 +399,14 @@ export default function Items() {
         console.error("Error loading brands:", error);
       }
     };
-
-    loadCategories();
     loadBrands();
-  }, [selectedStore]);
+  }, [
+    selectedStore,
+    isCreateItemOpen,
+    isEditOpen,
+    createItemForm.subcategoryId,
+    editForm.subcategoryId,
+  ]);
 
 
   // Load categories when create item dialog opens
@@ -404,26 +441,7 @@ export default function Items() {
           console.error("Error loading categories:", error);
         }
       };
-      const loadBrandsForItemForm = async () => {
-        try {
-          const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
-          const brandParams = { limit: 1000 };
-          if (storeId) {
-            brandParams.store_id = storeId;
-          }
-          const brandsResponse = await brandsAPI.getBrands(brandParams);
-          const fetchedBrands =
-            brandsResponse?.data?.brands ||
-            brandsResponse?.brands ||
-            [];
-          setBrands(Array.isArray(fetchedBrands) ? fetchedBrands : []);
-        } catch (error) {
-          console.error("Error loading brands:", error);
-        }
-      };
-
       loadCategoriesForItemForm();
-      loadBrandsForItemForm();
     }
   }, [isCreateItemOpen, selectedStore]);
 
@@ -1930,6 +1948,26 @@ export default function Items() {
     img.src = previewUrl;
   };
 
+  const handleEditFormKeyDown = useCallback((event) => {
+    if (event.key !== "Enter") return;
+    if (event.defaultPrevented) return;
+    const target = event.target;
+    const isTextarea = target.tagName === "TEXTAREA";
+    const isTextLikeInput =
+      target.tagName === "INPUT" &&
+      !["file", "hidden", "checkbox", "radio", "button", "submit", "reset", "image"].includes(
+        target.type
+      );
+    const isComboboxTrigger =
+      target.tagName === "BUTTON" && target.getAttribute("role") === "combobox";
+    if (!isTextLikeInput && !isComboboxTrigger && !isTextarea) return;
+    if (target.disabled || target.readOnly) return;
+    if (target.closest("[cmdk-input-wrapper]")) return;
+
+    event.preventDefault();
+    focusNextFieldInForm(event.currentTarget, target);
+  }, []);
+
   const handleEditSubmit = async (event) => {
     event.preventDefault();
     if (!editingItem) {
@@ -2426,6 +2464,9 @@ export default function Items() {
       if (storeId) {
         brandData.store_id = storeId;
       }
+      if (createItemForm.subcategoryId) {
+        brandData.subcategory_id = createItemForm.subcategoryId;
+      }
 
       const response = await brandsAPI.createBrand(brandData);
       const newBrand = response?.data || response;
@@ -2437,65 +2478,6 @@ export default function Items() {
         brand: ""
       }));
       setNewBrandInItemForm("");
-      setShowBrandCreation(false);
-
-      toast({
-        title: "Success",
-        description: "Brand created successfully",
-      });
-    } catch (error) {
-      console.error("Error creating brand:", error);
-      let errorMessage = "Failed to create brand. Please try again.";
-      if (error.message) {
-        if (error.message.includes("Access denied") || error.message.includes("Missing required screen permissions")) {
-          errorMessage = "You don't have permission to create brands. Please contact an administrator.";
-        } else if (error.message.includes("Validation failed")) {
-          errorMessage = "Please check your input and try again.";
-        } else {
-          errorMessage = error.message;
-        }
-      }
-
-      toast({
-        title: "Error",
-        description: errorMessage,
-        variant: "destructive",
-      });
-    } finally {
-      setSavingCategory(false);
-    }
-  };
-
-  const handleCreateBrandInEditForm = async () => {
-    if (!newBrandInEditForm.trim()) {
-      toast({
-        title: "Validation Error",
-        description: "Brand name is required",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    setSavingCategory(true);
-    try {
-      const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
-      const brandData = {
-        name: newBrandInEditForm.trim(),
-      };
-      if (storeId) {
-        brandData.store_id = storeId;
-      }
-
-      const response = await brandsAPI.createBrand(brandData);
-      const newBrand = response?.data || response;
-
-      setBrands((prev) => [...prev, newBrand]);
-      setEditForm((prev) => ({
-        ...prev,
-        brandId: String(newBrand.id || newBrand.code),
-        brand: ""
-      }));
-      setNewBrandInEditForm("");
       setShowBrandCreation(false);
 
       toast({
@@ -2802,6 +2784,15 @@ export default function Items() {
             >
               Subcategories
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => navigate("/brands")}
+            >
+              <Tag className="h-3.5 w-3.5 mr-1.5" aria-hidden />
+              Brands
+            </Button>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-3">
@@ -3025,7 +3016,7 @@ export default function Items() {
               Update the information for the selected inventory item. Changes are saved when you click save.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleEditSubmit} className="space-y-6">
+          <form onSubmit={handleEditSubmit} onKeyDown={handleEditFormKeyDown} className="space-y-6">
             {/* Basic Information */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Basic Information</h3>
@@ -3210,22 +3201,7 @@ export default function Items() {
               {/* Brand Selection - Only show after subcategory is selected */}
               {editForm.subcategoryId && (
                 <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="edit-item-brand">Brand</Label>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => {
-                      setShowBrandCreation(!showBrandCreation);
-                    }}
-                    className="text-xs"
-                  >
-                    {showBrandCreation ? "Cancel" : "+ Create Brand"}
-                  </Button>
-                </div>
-
-                {!showBrandCreation ? (
+                  <Label htmlFor="edit-item-brand">Brand</Label>
                   <Popover open={editBrandPopoverOpen} onOpenChange={setEditBrandPopoverOpen}>
                     <PopoverTrigger asChild>
                       <Button
@@ -3290,41 +3266,6 @@ export default function Items() {
                       </Command>
                     </PopoverContent>
                   </Popover>
-                ) : (
-                  <div className="space-y-2 p-4 border rounded-lg bg-muted/50">
-                    <Label>Create New Brand</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        placeholder="Enter brand name..."
-                        value={newBrandInEditForm}
-                        onChange={(e) => setNewBrandInEditForm(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault();
-                            handleCreateBrandInEditForm();
-                          }
-                        }}
-                      />
-                      <Button
-                        type="button"
-                        onClick={handleCreateBrandInEditForm}
-                        disabled={savingCategory || !newBrandInEditForm.trim()}
-                      >
-                        {savingCategory ? (
-                          <>
-                            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                            Creating...
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="h-4 w-4 mr-2" />
-                            Create
-                          </>
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                )}
                 </div>
               )}
             </div>
@@ -3339,12 +3280,6 @@ export default function Items() {
                     id="edit-item-barcode"
                     value={editForm.barcode}
                     onChange={handleFormChange('barcode')}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        e.stopPropagation();
-                      }
-                    }}
                     onPaste={(e) => {
                       e.preventDefault();
                       const pasted = (e.clipboardData?.getData?.('text') || '').trim();

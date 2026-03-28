@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, Pencil, Trash2, FolderOpen } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FolderOpen, Power } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,8 @@ import { useAuth } from "@/contexts/AuthContext";
 
 const Subcategories = () => {
   const { toast } = useToast();
-  const { selectedStore } = useAuth();
+  const { selectedStore, hasEditRight } = useAuth();
+  const canEdit = hasEditRight("items");
 
   const [categories, setCategories] = useState([]);
   const [selectedCategoryCode, setSelectedCategoryCode] = useState("");
@@ -35,7 +36,8 @@ const Subcategories = () => {
     const loadCategories = async () => {
       setLoading(true);
       try {
-        const params = storeId ? { store_id: storeId } : {};
+        const params = { include_inactive: true };
+        if (storeId) params.store_id = storeId;
         const response = await categoriesAPI.getCategoryHierarchy(params);
         const hierarchy =
           response?.data?.categories ||
@@ -89,15 +91,21 @@ const Subcategories = () => {
   }, [subcategories, searchTerm]);
 
   const refreshCurrentCategory = async () => {
-    if (!selectedCategoryCode) return;
     try {
-      const params = storeId ? { store_id: storeId } : {};
-      const response = await categoriesAPI.getCategory(selectedCategoryCode, params);
-      const subs =
-        response?.data?.subcategories ||
-        response?.subcategories ||
+      const params = { include_inactive: true };
+      if (storeId) params.store_id = storeId;
+      const response = await categoriesAPI.getCategoryHierarchy(params);
+      const hierarchy =
+        response?.data?.categories ||
+        response?.data ||
+        response?.categories ||
         [];
-      setSubcategories(Array.isArray(subs) ? subs : []);
+      const list = Array.isArray(hierarchy) ? hierarchy : [];
+      setCategories(list);
+      if (selectedCategoryCode) {
+        const sel = list.find((cat) => String(cat.code) === String(selectedCategoryCode));
+        setSubcategories(sel?.subcategories || []);
+      }
     } catch (error) {
       console.error("Error refreshing subcategories:", error);
       toast({
@@ -280,6 +288,42 @@ const Subcategories = () => {
     }
   };
 
+  const handleToggleSubcategoryActive = async (subcategory) => {
+    if (!subcategory) return;
+    const code = subcategory.code || subcategory.SubCategoryCode;
+    if (!code) {
+      toast({
+        title: "Error",
+        description: "Unable to determine subcategory code.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setSaving(true);
+    try {
+      const currentlyActive = subcategory.isActive !== false;
+      await categoriesAPI.updateSubcategory(code, {
+        isActive: !currentlyActive,
+      });
+      toast({
+        title: "Updated",
+        description: !currentlyActive
+          ? "Subcategory is now active."
+          : "Subcategory is now inactive.",
+      });
+      await refreshCurrentCategory();
+    } catch (error) {
+      console.error("Error toggling subcategory status:", error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update subcategory status",
+        variant: "destructive",
+      });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6 p-4 md:p-6">
       {/* Header */}
@@ -294,7 +338,7 @@ const Subcategories = () => {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Button onClick={handleOpenCreateDialog} disabled={!selectedCategoryCode}>
+          <Button onClick={handleOpenCreateDialog} disabled={!selectedCategoryCode || !canEdit}>
             <Plus className="h-4 w-4 mr-2" />
             Add Subcategory
           </Button>
@@ -371,23 +415,35 @@ const Subcategories = () => {
               {filteredSubcategories.map((sub) => (
                 <div
                   key={sub.code || sub.id}
-                  className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm"
                 >
-                  <div>
-                    <div className="font-medium">{sub.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      Code: {sub.code}{" "}
-                      {sub.isActive === false && (
-                        <span className="ml-1">(Inactive)</span>
-                      )}
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
+                    <div>
+                      <div className="font-medium">{sub.name}</div>
+                      <div className="text-xs text-muted-foreground">Code: {sub.code}</div>
                     </div>
+                    <Badge variant={sub.isActive === false ? "destructive" : "default"}>
+                      {sub.isActive === false ? "Inactive" : "Active"}
+                    </Badge>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="h-8"
+                      onClick={() => handleToggleSubcategoryActive(sub)}
+                      disabled={saving || !canEdit}
+                      title={sub.isActive === false ? "Activate subcategory" : "Deactivate subcategory"}
+                    >
+                      <Power className="h-3.5 w-3.5 mr-1" />
+                      {sub.isActive === false ? "Activate" : "Deactivate"}
+                    </Button>
                     <Button
                       variant="outline"
                       size="icon"
                       className="h-8 w-8"
                       onClick={() => handleOpenEditDialog(sub)}
+                      disabled={!canEdit}
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
@@ -396,7 +452,7 @@ const Subcategories = () => {
                       size="icon"
                       className="h-8 w-8 text-red-600 hover:text-red-700"
                       onClick={() => handleDeleteSubcategory(sub)}
-                      disabled={saving}
+                      disabled={saving || !canEdit}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

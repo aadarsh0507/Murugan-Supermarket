@@ -32,6 +32,11 @@ const Brand = sequelize.define(
             type: DataTypes.INTEGER.UNSIGNED,
             allowNull: true,
             field: 'store_id'
+        },
+        subcategoryId: {
+            type: DataTypes.STRING(150),
+            allowNull: true,
+            field: 'subcategory_id'
         }
     },
     {
@@ -47,6 +52,10 @@ const Brand = sequelize.define(
             {
                 fields: ['IsActive'],
                 name: 'idx_is_active'
+            },
+            {
+                fields: ['subcategory_id'],
+                name: 'idx_brand_subcategory'
             }
         ]
     }
