@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Search, Pencil, Trash2, FolderOpen, Power } from "lucide-react";
+import { Plus, Search, Pencil, FolderOpen, Power } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -252,42 +252,6 @@ const Subcategories = () => {
     }
   };
 
-  const handleDeleteSubcategory = async (subcategory) => {
-    if (!subcategory) return;
-    const code = subcategory.code || subcategory.SubCategoryCode;
-    if (!code) {
-      toast({
-        title: "Error",
-        description: "Unable to determine subcategory code for delete.",
-        variant: "destructive",
-      });
-      return;
-    }
-
-    if (!window.confirm(`Are you sure you want to delete subcategory "${subcategory.name}"?`)) {
-      return;
-    }
-
-    setSaving(true);
-    try {
-      await categoriesAPI.deleteSubcategory(code);
-      toast({
-        title: "Deleted",
-        description: "Subcategory deleted successfully",
-      });
-      await refreshCurrentCategory();
-    } catch (error) {
-      console.error("Error deleting subcategory:", error);
-      toast({
-        title: "Error",
-        description: error.message || "Failed to delete subcategory",
-        variant: "destructive",
-      });
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const handleToggleSubcategoryActive = async (subcategory) => {
     if (!subcategory) return;
     const code = subcategory.code || subcategory.SubCategoryCode;
@@ -446,15 +410,6 @@ const Subcategories = () => {
                       disabled={!canEdit}
                     >
                       <Pencil className="h-4 w-4" />
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-8 w-8 text-red-600 hover:text-red-700"
-                      onClick={() => handleDeleteSubcategory(sub)}
-                      disabled={saving || !canEdit}
-                    >
-                      <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
                 </div>
