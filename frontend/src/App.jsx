@@ -23,6 +23,7 @@ import PurchaseOrders from "./pages/PurchaseOrders";
 import Orders from "./pages/Orders";
 import Credits from "./pages/Credits";
 import Subcategories from "./pages/Subcategories";
+import Brands from "./pages/Brands";
 import NotFound from "./pages/NotFound";
 import Billing from "./pages/Billing";
 import UserRights from "./pages/UserRights";
@@ -112,6 +113,14 @@ const App = () => (
               element={
                 <ProtectedRoute screenId={SCREEN_KEY_TO_ID["subcategories"]}>
                   <Layout><Subcategories /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/brands"
+              element={
+                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["items"]}>
+                  <Layout><Brands /></Layout>
                 </ProtectedRoute>
               }
             />

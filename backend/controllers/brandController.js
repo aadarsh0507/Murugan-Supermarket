@@ -58,6 +58,21 @@ export const getAllBrands = async (req, res) => {
 
     const hasStoreIdColumn = storeIdColumnCheck.length > 0;
 
+    const subcategoryColumnCheck = await query(`
+      SELECT COLUMN_NAME 
+      FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'Brand'
+      AND COLUMN_NAME = 'subcategory_id'
+    `);
+    const hasSubcategoryIdColumn = subcategoryColumnCheck.length > 0;
+
+    const subcategoryFilter =
+      req.query.subcategory_id?.trim() || req.query.subcategoryId?.trim() || '';
+    const includeLegacy = ['1', 'true', 'yes'].includes(
+      String(req.query.include_legacy ?? req.query.includeLegacy ?? '').toLowerCase()
+    );
+
     const filters = [];
     const params = [];
 
@@ -66,13 +81,28 @@ export const getAllBrands = async (req, res) => {
       params.push(storeId);
     }
 
+    if (hasSubcategoryIdColumn && subcategoryFilter) {
+      if (includeLegacy) {
+        filters.push('(subcategory_id = ? OR subcategory_id IS NULL)');
+        params.push(subcategoryFilter);
+      } else {
+        filters.push('subcategory_id = ?');
+        params.push(subcategoryFilter);
+      }
+    }
+
     if (search) {
       filters.push('(Description LIKE ? OR BrandCode LIKE ?)');
       const searchLike = `%${search}%`;
       params.push(searchLike, searchLike);
     }
 
-    filters.push('IsActive = 1');
+    const includeInactive = ['1', 'true', 'yes'].includes(
+      String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
+    );
+    if (!includeInactive) {
+      filters.push('IsActive = 1');
+    }
     filters.push("Description IS NOT NULL");
     filters.push("TRIM(Description) <> ''");
 
@@ -85,9 +115,13 @@ export const getAllBrands = async (req, res) => {
     );
     const total = Number(countResult?.total || 0);
 
+    const selectCols = hasSubcategoryIdColumn
+      ? 'BrandCode, Description, store_id, subcategory_id, IsActive'
+      : 'BrandCode, Description, store_id, IsActive';
+
     // Get brands
     const brands = await query(
-      `SELECT BrandCode, Description, store_id, IsActive
+      `SELECT ${selectCols}
        FROM Brand
        ${whereClause}
        ORDER BY Description ASC
@@ -100,13 +134,20 @@ export const getAllBrands = async (req, res) => {
         const code = row.BrandCode ? String(row.BrandCode).trim() : null;
         const name = row.Description ? String(row.Description).trim() : null;
         if (!code || !name) return null;
-        return {
+        const entry = {
           id: code,
           code: code,
           name: name,
           storeId: row.store_id || null,
           isActive: Boolean(row.IsActive)
         };
+        if (hasSubcategoryIdColumn) {
+          entry.subcategoryId =
+            row.subcategory_id != null && String(row.subcategory_id).trim() !== ''
+              ? String(row.subcategory_id).trim()
+              : null;
+        }
+        return entry;
       })
       .filter(Boolean);
 
@@ -178,8 +219,21 @@ export const getBrandById = async (req, res) => {
       brandParams.push(storeId);
     }
 
+    const subcategoryColumnCheck = await query(`
+      SELECT COLUMN_NAME 
+      FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'Brand'
+      AND COLUMN_NAME = 'subcategory_id'
+    `);
+    const hasSubcategoryIdColumn = subcategoryColumnCheck.length > 0;
+
+    const selectCols = hasSubcategoryIdColumn
+      ? 'BrandCode, Description, store_id, subcategory_id, IsActive'
+      : 'BrandCode, Description, store_id, IsActive';
+
     const brandRows = await query(
-      `SELECT BrandCode, Description, store_id, IsActive
+      `SELECT ${selectCols}
        FROM Brand
        WHERE ${brandFilters.join(' AND ')}`,
       brandParams
@@ -194,15 +248,23 @@ export const getBrandById = async (req, res) => {
 
     const brand = brandRows[0];
 
+    const payload = {
+      id: brand.BrandCode,
+      code: brand.BrandCode,
+      name: brand.Description || brand.BrandCode,
+      storeId: brand.store_id || null,
+      isActive: Boolean(brand.IsActive)
+    };
+    if (hasSubcategoryIdColumn) {
+      payload.subcategoryId =
+        brand.subcategory_id != null && String(brand.subcategory_id).trim() !== ''
+          ? String(brand.subcategory_id).trim()
+          : null;
+    }
+
     res.json({
       status: 'success',
-      data: {
-        id: brand.BrandCode,
-        code: brand.BrandCode,
-        name: brand.Description || brand.BrandCode,
-        storeId: brand.store_id || null,
-        isActive: Boolean(brand.IsActive)
-      }
+      data: payload
     });
   } catch (error) {
     console.error('Error fetching brand:', error);
@@ -269,6 +331,18 @@ export const createBrand = async (req, res) => {
     `);
 
     const hasStoreIdColumn = storeIdColumnCheck.length > 0;
+
+    const subcategoryColumnCheck = await query(`
+      SELECT COLUMN_NAME 
+      FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'Brand'
+      AND COLUMN_NAME = 'subcategory_id'
+    `);
+    const hasSubcategoryIdColumn = subcategoryColumnCheck.length > 0;
+    const subRaw = req.body.subcategory_id ?? req.body.subcategoryId;
+    const subcategoryId =
+      subRaw != null && String(subRaw).trim() !== '' ? String(subRaw).trim() : null;
 
     // Determine brand code to use
     let brandCode = code || null;
@@ -338,11 +412,15 @@ export const createBrand = async (req, res) => {
       }
     } else {
       existingQuery = 'SELECT BrandCode FROM Brand WHERE Description = ?';
-      existingParams.push(name);
+      existingParams.push(name.trim());
 
       if (hasStoreIdColumn && storeId) {
         existingQuery += ' AND store_id = ?';
         existingParams.push(storeId);
+      }
+      if (hasSubcategoryIdColumn) {
+        existingQuery += ' AND (subcategory_id <=> ?)';
+        existingParams.push(subcategoryId);
       }
     }
 
@@ -356,40 +434,37 @@ export const createBrand = async (req, res) => {
     }
 
     // Insert new brand
-    if (hasStoreIdColumn) {
-      if (brandCode !== null) {
-        await query(
-          `INSERT INTO Brand (BrandCode, Description, store_id, IsActive, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-          [brandCode, name, storeId, isActive ? 1 : 0, currentDate, currentDate]
-        );
-      } else {
-        await query(
-          `INSERT INTO Brand (Description, store_id, IsActive, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
-          [name, storeId, isActive ? 1 : 0, currentDate, currentDate]
-        );
-      }
-    } else {
-      if (brandCode !== null) {
-        await query(
-          `INSERT INTO Brand (BrandCode, Description, IsActive, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?)`,
-          [brandCode, name, isActive ? 1 : 0, currentDate, currentDate]
-        );
-      } else {
-        await query(
-          `INSERT INTO Brand (Description, IsActive, created_at, updated_at)
-           VALUES (?, ?, ?, ?)`,
-          [name, isActive ? 1 : 0, currentDate, currentDate]
-        );
-      }
+    const insertCols = [];
+    const insertVals = [];
+    if (brandCode !== null && brandCode !== undefined) {
+      insertCols.push('BrandCode');
+      insertVals.push(brandCode);
     }
+    insertCols.push('Description');
+    insertVals.push(name);
+    if (hasStoreIdColumn) {
+      insertCols.push('store_id');
+      insertVals.push(storeId);
+    }
+    if (hasSubcategoryIdColumn) {
+      insertCols.push('subcategory_id');
+      insertVals.push(subcategoryId);
+    }
+    insertCols.push('IsActive', 'created_at', 'updated_at');
+    insertVals.push(isActive ? 1 : 0, currentDate, currentDate);
+
+    await query(
+      `INSERT INTO Brand (${insertCols.join(', ')}) VALUES (${insertCols.map(() => '?').join(', ')})`,
+      insertVals
+    );
 
     // Fetch created brand
     let selectQuery = 'SELECT BrandCode, Description, IsActive';
     if (hasStoreIdColumn) {
       selectQuery += ', store_id';
+    }
+    if (hasSubcategoryIdColumn) {
+      selectQuery += ', subcategory_id';
     }
 
     let brand;
@@ -403,6 +478,10 @@ export const createBrand = async (req, res) => {
         selectQuery += ' AND store_id = ?';
         selectParams.push(storeId);
       }
+      if (hasSubcategoryIdColumn) {
+        selectQuery += ' AND (subcategory_id <=> ?)';
+        selectParams.push(subcategoryId);
+      }
       selectQuery += ' ORDER BY BrandCode DESC LIMIT 1';
       [brand] = await query(selectQuery, selectParams);
     }
@@ -414,16 +493,24 @@ export const createBrand = async (req, res) => {
       });
     }
 
+    const createdPayload = {
+      id: brand.BrandCode,
+      code: brand.BrandCode,
+      name: brand.Description,
+      storeId: hasStoreIdColumn ? (brand.store_id || null) : null,
+      isActive: Boolean(brand.IsActive)
+    };
+    if (hasSubcategoryIdColumn) {
+      createdPayload.subcategoryId =
+        brand.subcategory_id != null && String(brand.subcategory_id).trim() !== ''
+          ? String(brand.subcategory_id).trim()
+          : null;
+    }
+
     res.status(201).json({
       status: 'success',
       message: 'Brand created successfully',
-      data: {
-        id: brand.BrandCode,
-        code: brand.BrandCode,
-        name: brand.Description,
-        storeId: hasStoreIdColumn ? (brand.store_id || null) : null,
-        isActive: Boolean(brand.IsActive)
-      }
+      data: createdPayload
     });
   } catch (error) {
     console.error('Error creating brand:', error);
@@ -445,7 +532,7 @@ export const updateBrand = async (req, res) => {
       });
     }
 
-    const { name, isActive, store_id } = req.body;
+    const { name, isActive, store_id, subcategory_id, subcategoryId: bodySubcategoryId } = req.body;
 
     // Check if Brand table exists
     const brandTableCheck = await query(`
@@ -472,6 +559,15 @@ export const updateBrand = async (req, res) => {
     `);
 
     const hasStoreIdColumn = storeIdColumnCheck.length > 0;
+
+    const subcategoryColumnCheck = await query(`
+      SELECT COLUMN_NAME 
+      FROM information_schema.COLUMNS 
+      WHERE TABLE_SCHEMA = DATABASE() 
+      AND TABLE_NAME = 'Brand'
+      AND COLUMN_NAME = 'subcategory_id'
+    `);
+    const hasSubcategoryIdColumn = subcategoryColumnCheck.length > 0;
 
     // Check if brand exists
     let checkQuery = 'SELECT BrandCode FROM Brand WHERE BrandCode = ?';
@@ -508,6 +604,14 @@ export const updateBrand = async (req, res) => {
       updateParams.push(isActive ? 1 : 0);
     }
 
+    if (hasSubcategoryIdColumn && (subcategory_id !== undefined || bodySubcategoryId !== undefined)) {
+      const subRaw = subcategory_id !== undefined ? subcategory_id : bodySubcategoryId;
+      const subVal =
+        subRaw != null && String(subRaw).trim() !== '' ? String(subRaw).trim() : null;
+      updates.push('subcategory_id = ?');
+      updateParams.push(subVal);
+    }
+
     if (updates.length === 0) {
       return res.status(400).json({
         status: 'error',
@@ -529,20 +633,31 @@ export const updateBrand = async (req, res) => {
     if (hasStoreIdColumn) {
       selectQuery += ', store_id';
     }
+    if (hasSubcategoryIdColumn) {
+      selectQuery += ', subcategory_id';
+    }
     selectQuery += ' FROM Brand WHERE BrandCode = ?';
 
     const [updatedBrand] = await query(selectQuery, [brandCode]);
 
+    const updatePayload = {
+      id: updatedBrand.BrandCode,
+      code: updatedBrand.BrandCode,
+      name: updatedBrand.Description,
+      storeId: hasStoreIdColumn ? (updatedBrand.store_id || null) : null,
+      isActive: Boolean(updatedBrand.IsActive)
+    };
+    if (hasSubcategoryIdColumn) {
+      updatePayload.subcategoryId =
+        updatedBrand.subcategory_id != null && String(updatedBrand.subcategory_id).trim() !== ''
+          ? String(updatedBrand.subcategory_id).trim()
+          : null;
+    }
+
     res.json({
       status: 'success',
       message: 'Brand updated successfully',
-      data: {
-        id: updatedBrand.BrandCode,
-        code: updatedBrand.BrandCode,
-        name: updatedBrand.Description,
-        storeId: hasStoreIdColumn ? (updatedBrand.store_id || null) : null,
-        isActive: Boolean(updatedBrand.IsActive)
-      }
+      data: updatePayload
     });
   } catch (error) {
     console.error('Error updating brand:', error);

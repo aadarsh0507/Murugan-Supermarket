@@ -116,6 +116,7 @@ const Categories = () => {
       const params = {
         includeSubcategories: true,
         limit: 100,
+        include_inactive: true,
       };
       if (storeId) {
         params.store_id = storeId;
@@ -649,11 +650,17 @@ const Categories = () => {
 
   const handleToggleStatus = async (category) => {
     try {
-      await categoriesAPI.toggleCategoryStatus(category._id);
-      await loadCategories(); // Refresh the list
+      const categoryId = String(category._id ?? category.code ?? category.id ?? "");
+      if (!categoryId) {
+        throw new Error("Missing category identifier");
+      }
+      await categoriesAPI.updateCategory(categoryId, {
+        isActive: !category.isActive,
+      });
+      await loadCategories();
       toast({
         title: "Success",
-        description: `Category ${!category.isActive ? 'activated' : 'deactivated'} successfully`,
+        description: `Category ${!category.isActive ? "activated" : "deactivated"} successfully`,
       });
     } catch (error) {
       console.error("Error toggling status:", error);

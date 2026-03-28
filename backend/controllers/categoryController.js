@@ -104,7 +104,12 @@ export const getAllCategories = async (req, res) => {
         params.push(likeValue, likeValue);
       }
 
-      filters.push('IsActive = 1');
+      const includeInactive = ['1', 'true', 'yes'].includes(
+        String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
+      );
+      if (!includeInactive) {
+        filters.push('IsActive = 1');
+      }
 
       const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
@@ -259,17 +264,30 @@ export const getCategoryById = async (req, res) => {
       }
     }
 
-    // Get subcategories from Subcategory table using ParentId
-    const subcategoryFilters = ['ParentId = ?', 'IsActive = 1', "Description IS NOT NULL", "TRIM(Description) <> ''"];
-    const subcategoryParams = [categoryCode];
+    // Get subcategories from Subcategory table using ParentId (match INT/VARCHAR like hierarchy)
+    const subcategoryFilters = ['IsActive = 1', "Description IS NOT NULL", "TRIM(Description) <> ''"];
+    const subcategoryParams = [];
+    const categoryCodeNum = Number(categoryCode);
+    if (Number.isInteger(categoryCodeNum)) {
+      subcategoryFilters.push('(ParentId = ? OR ParentId = ? OR CAST(ParentId AS CHAR) = ?)');
+      subcategoryParams.push(categoryCodeNum, categoryCode, categoryCode);
+    } else {
+      subcategoryFilters.push('(ParentId = ? OR CAST(ParentId AS CHAR) = ?)');
+      subcategoryParams.push(categoryCode, categoryCode);
+    }
 
-    if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
-      subcategoryFilters.push('store_id = ?');
+    const subStoreIdColumnCheck = await query(`
+      SELECT COLUMN_NAME FROM information_schema.COLUMNS
+      WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Subcategory' AND COLUMN_NAME = 'store_id'
+    `);
+    const subHasStoreId = subStoreIdColumnCheck.length > 0;
+    if (subHasStoreId && storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
+      subcategoryFilters.push('(store_id = ? OR store_id IS NULL)');
       subcategoryParams.push(storeId);
     }
 
     const rows = await query(
-      `SELECT SubCategoryCode, Description, ParentId, store_id
+      `SELECT SubCategoryCode, Description, ParentId${subHasStoreId ? ', store_id' : ''}
        FROM Subcategory
        WHERE ${subcategoryFilters.join(' AND ')}
        ORDER BY Description ASC`,
@@ -328,6 +346,9 @@ export const getCategoryById = async (req, res) => {
 export const getCategoryHierarchy = async (req, res) => {
   try {
     const storeId = req.query.store_id ? Number(req.query.store_id) : undefined;
+    const includeInactive = ['1', 'true', 'yes'].includes(
+      String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
+    );
 
     // Check if Category table exists
     const categoryTableCheck = await query(`
@@ -350,7 +371,10 @@ export const getCategoryHierarchy = async (req, res) => {
       const hasStoreIdColumn = storeIdColumnCheck.length > 0;
 
       // Use Category table
-      const categoryFilters = ['IsActive = 1'];
+      const categoryFilters = [];
+      if (!includeInactive) {
+        categoryFilters.push('IsActive = 1');
+      }
       const categoryParams = [];
 
       if (hasStoreIdColumn && storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
@@ -358,10 +382,13 @@ export const getCategoryHierarchy = async (req, res) => {
         categoryParams.push(storeId);
       }
 
+      const categoryWhere =
+        categoryFilters.length > 0 ? `WHERE ${categoryFilters.join(' AND ')}` : '';
+
       const categoryRows = await query(
-        `SELECT CategoryCode, Description${hasStoreIdColumn ? ', store_id' : ''}
+        `SELECT CategoryCode, Description, IsActive${hasStoreIdColumn ? ', store_id' : ''}
          FROM Category
-         WHERE ${categoryFilters.join(' AND ')}
+         ${categoryWhere}
          ORDER BY CategoryCode ASC`,
         categoryParams
       );
@@ -385,7 +412,10 @@ export const getCategoryHierarchy = async (req, res) => {
 
           // Get subcategories for this category from Subcategory table
           // ParentId might be INT or VARCHAR, so we'll match both
-          const subcategoryFilters = ['IsActive = 1'];
+          const subcategoryFilters = [];
+          if (!includeInactive) {
+            subcategoryFilters.push('IsActive = 1');
+          }
           const subcategoryParams = [];
 
           // Try to match ParentId - it could be INT or VARCHAR
@@ -404,14 +434,14 @@ export const getCategoryHierarchy = async (req, res) => {
           subcategoryFilters.push("TRIM(Description) <> ''");
 
           if (subHasStoreIdColumn && storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
-            subcategoryFilters.push('store_id = ?');
+            subcategoryFilters.push('(store_id = ? OR store_id IS NULL)');
             subcategoryParams.push(storeId);
           }
 
           let subcategoryRows = [];
           try {
             subcategoryRows = await query(
-              `SELECT SubCategoryCode, Description, ParentId${subHasStoreIdColumn ? ', store_id' : ''}
+              `SELECT SubCategoryCode, Description, ParentId, IsActive${subHasStoreIdColumn ? ', store_id' : ''}
                FROM Subcategory
                WHERE ${subcategoryFilters.join(' AND ')}
                ORDER BY Description ASC`,
@@ -421,7 +451,10 @@ export const getCategoryHierarchy = async (req, res) => {
             console.error('Error fetching subcategories with store_id filter:', subError);
             // Fallback: try without store_id filter if it was being used
             try {
-              const fallbackFilters = ['IsActive = 1'];
+              const fallbackFilters = [];
+              if (!includeInactive) {
+                fallbackFilters.push('IsActive = 1');
+              }
               const fallbackParams = [];
 
               // Match ParentId with type flexibility
@@ -438,7 +471,7 @@ export const getCategoryHierarchy = async (req, res) => {
               fallbackFilters.push("TRIM(Description) <> ''");
 
               subcategoryRows = await query(
-                `SELECT SubCategoryCode, Description, ParentId${subHasStoreIdColumn ? ', store_id' : ''}
+                `SELECT SubCategoryCode, Description, ParentId, IsActive${subHasStoreIdColumn ? ', store_id' : ''}
                  FROM Subcategory
                  WHERE ${fallbackFilters.join(' AND ')}
                  ORDER BY Description ASC`,
@@ -460,7 +493,7 @@ export const getCategoryHierarchy = async (req, res) => {
                 code: code,
                 name: name,
                 storeId: subRow.store_id || null,
-                isActive: true
+                isActive: Boolean(subRow.IsActive)
               };
             })
             .filter(Boolean);
@@ -470,7 +503,7 @@ export const getCategoryHierarchy = async (req, res) => {
             code: categoryCode,
             name: row.Description || getCategoryName(categoryCode),
             storeId: row.store_id || null,
-            isActive: true,
+            isActive: Boolean(row.IsActive),
             subcategories
           };
         })
@@ -499,10 +532,11 @@ export const getCategoryHierarchy = async (req, res) => {
 
         // Get subcategories for this category from Subcategory table
         // Using ParentId to match the category and Description as the name
+        const subActiveClause = includeInactive ? '' : ' AND IsActive = 1';
         const subcategoryRows = await query(
-          `SELECT SubCategoryCode, Description, ParentId
+          `SELECT SubCategoryCode, Description, ParentId, IsActive
            FROM Subcategory
-           WHERE ParentId = ? AND IsActive = 1 AND Description IS NOT NULL AND TRIM(Description) <> ''
+           WHERE ParentId = ?${subActiveClause} AND Description IS NOT NULL AND TRIM(Description) <> ''
            ORDER BY Description ASC`,
           [categoryCode]
         );
@@ -516,7 +550,7 @@ export const getCategoryHierarchy = async (req, res) => {
               id: `${categoryCode}:${code}`,
               code: code,
               name: name,
-              isActive: true
+              isActive: Boolean(subRow.IsActive)
             };
           })
           .filter(Boolean);

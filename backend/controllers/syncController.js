@@ -173,8 +173,19 @@ const getLocalTableNames = async () => {
 };
 
 /**
+ * Full table scan + write every row (slow). Default sync is incremental (watermark + unchanged skip).
+ * Enable with SYNC_FULL_SYNC=true / FORCE_FULL_SYNC=true or ?full=1 on the stream.
+ */
+const isFullSyncRequested = (req) =>
+  process.env.SYNC_FULL_SYNC === 'true' ||
+  process.env.SYNC_FULL_SYNC === '1' ||
+  process.env.FORCE_FULL_SYNC === 'true' ||
+  process.env.FORCE_FULL_SYNC === '1' ||
+  (req?.query && (req.query.full === 'true' || req.query.full === '1'));
+
+/**
  * Get primary key column names for a table from the local DB schema.
- * Returns empty array if the table has no primary key (such tables are skipped for row sync).
+ * Returns empty array if the table has no primary key.
  */
 const getPrimaryKeyColumns = async (tableName) => {
   const rows = await queryLocalDb(
@@ -234,6 +245,85 @@ const getTablesInDependencyOrder = async (tableNames) => {
   return order;
 };
 
+const fetchTableColumnMeta = async (tableName, queryFn) => {
+  const rows = await queryFn(
+    `SELECT COLUMN_NAME, ORDINAL_POSITION, COLUMN_TYPE, IS_NULLABLE,
+            COLUMN_DEFAULT, EXTRA, COLUMN_COMMENT
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+     ORDER BY ORDINAL_POSITION`,
+    [tableName]
+  );
+  return Array.isArray(rows) ? rows : [];
+};
+
+/** Build ADD COLUMN … clause from an information_schema.COLUMNS row (local DB). */
+const buildAddColumnClauseFromMeta = (m) => {
+  const parts = [`\`${m.COLUMN_NAME}\``, m.COLUMN_TYPE];
+  parts.push(m.IS_NULLABLE === 'YES' ? 'NULL' : 'NOT NULL');
+  const extra = String(m.EXTRA || '').trim();
+  const hasAutoInc = /auto_increment/i.test(extra);
+  if (!hasAutoInc) {
+    const def = m.COLUMN_DEFAULT;
+    if (def != null && def !== undefined) {
+      if (Buffer.isBuffer(def)) {
+        parts.push('DEFAULT', `0x${def.toString('hex')}`);
+      } else if (typeof def === 'string') {
+        const u = def.toUpperCase();
+        if (u.includes('CURRENT_TIMESTAMP')) parts.push('DEFAULT', def);
+        else if (u === 'NULL') parts.push('DEFAULT NULL');
+        else if (/^-?\d+(\.\d+)?$/.test(def)) parts.push('DEFAULT', def);
+        else parts.push('DEFAULT', `'${def.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`);
+      } else {
+        parts.push('DEFAULT', def);
+      }
+    }
+  }
+  if (extra) parts.push(extra);
+  if (m.COLUMN_COMMENT) {
+    parts.push('COMMENT', `'${String(m.COLUMN_COMMENT).replace(/'/g, "''")}'`);
+  }
+  return parts.join(' ');
+};
+
+/**
+ * Global table may have been created before new local columns existed.
+ * CREATE TABLE IF NOT EXISTS does not add columns; push would fail with ER_BAD_FIELD_ERROR.
+ */
+const addMissingColumnsToGlobalFromLocal = async (tableName) => {
+  let localCols;
+  let globalCols;
+  try {
+    localCols = await fetchTableColumnMeta(tableName, queryLocalDb);
+    globalCols = await fetchTableColumnMeta(tableName, queryGlobalDb);
+  } catch (err) {
+    console.warn(`[Sync] Could not compare columns for "${tableName}":`, err?.message);
+    return;
+  }
+  const globalNames = new Set(globalCols.map((r) => String(r.COLUMN_NAME)));
+  for (const m of localCols) {
+    const name = String(m.COLUMN_NAME);
+    if (globalNames.has(name)) continue;
+    const clause = buildAddColumnClauseFromMeta(m);
+    const sql = `ALTER TABLE \`${tableName}\` ADD COLUMN ${clause}`;
+    try {
+      console.log(
+        `[Sync] Global "${tableName}" missing column "${name}"; ALTER ADD COLUMN (preview): ${sql.length > 240 ? `${sql.slice(0, 240)}…` : sql}`
+      );
+      await queryGlobalDb(sql);
+      globalNames.add(name);
+      console.log(`[Sync] ✅ Added column "${name}" to global "${tableName}"`);
+    } catch (alterErr) {
+      const wrapped = new Error(
+        `Failed to add column "${name}" to global table "${tableName}". ${alterErr?.message || ''}`
+      );
+      wrapped.code = alterErr?.code;
+      wrapped.originalError = alterErr;
+      throw wrapped;
+    }
+  }
+};
+
 /**
  * Ensure that a given table exists in the GLOBAL database.
  * If it does not exist, it is created using the schema from the LOCAL database.
@@ -243,6 +333,7 @@ const getTablesInDependencyOrder = async (tableNames) => {
  * 1. Runs SHOW CREATE TABLE on the LOCAL DB.
  * 2. Normalizes the DDL (strip DB qualifiers, strip FOREIGN KEYs).
  * 3. Runs CREATE TABLE IF NOT EXISTS on the GLOBAL DB.
+ * 4. Adds any columns that exist locally but are missing on global (schema drift).
  */
 const ensureGlobalTableFromLocalSchema = async (tableName) => {
   const showCreateRows = await queryLocalDb(`SHOW CREATE TABLE \`${tableName}\``);
@@ -328,6 +419,68 @@ const ensureGlobalTableFromLocalSchema = async (tableName) => {
     if (err?.code === 'ER_NO_SUCH_TABLE') throw err;
     console.warn(`[Sync] Could not drop FKs on global table "${tableName}":`, err?.message);
   }
+
+  await addMissingColumnsToGlobalFromLocal(tableName);
+  await addMissingIndexesToGlobalFromLocal(tableName);
+};
+
+/**
+ * Add indexes that exist on local but not on global (same INDEX_NAME + columns).
+ */
+const addMissingIndexesToGlobalFromLocal = async (tableName) => {
+  let localRows;
+  let globalNames;
+  try {
+    localRows = await queryLocalDb(
+      `SELECT INDEX_NAME, NON_UNIQUE, SEQ_IN_INDEX, COLUMN_NAME
+       FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME <> 'PRIMARY'
+       ORDER BY INDEX_NAME, SEQ_IN_INDEX`,
+      [tableName]
+    );
+    const g = await queryGlobalDb(
+      `SELECT DISTINCT INDEX_NAME AS name
+       FROM information_schema.STATISTICS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND INDEX_NAME <> 'PRIMARY'`,
+      [tableName]
+    );
+    globalNames = new Set((Array.isArray(g) ? g : []).map((r) => String(r.name)));
+  } catch (err) {
+    console.warn(`[Sync] Could not compare indexes for "${tableName}":`, err?.message);
+    return;
+  }
+  const byName = new Map();
+  for (const r of Array.isArray(localRows) ? localRows : []) {
+    const n = r.INDEX_NAME != null ? String(r.INDEX_NAME) : '';
+    if (!n) continue;
+    if (!byName.has(n)) byName.set(n, { nonUnique: r.NON_UNIQUE, cols: [] });
+    byName.get(n).cols.push(r.COLUMN_NAME);
+  }
+  for (const [indexName, { nonUnique, cols }] of byName) {
+    if (globalNames.has(indexName)) continue;
+    const colList = cols.map((c) => `\`${c}\``).join(', ');
+    if (!colList) continue;
+    const unique = Number(nonUnique) === 0;
+    const sql = unique
+      ? `ALTER TABLE \`${tableName}\` ADD UNIQUE INDEX \`${indexName}\` (${colList})`
+      : `ALTER TABLE \`${tableName}\` ADD INDEX \`${indexName}\` (${colList})`;
+    try {
+      await queryGlobalDb(sql);
+      console.log(`[Sync] ✅ Added index "${indexName}" on global "${tableName}"`);
+      globalNames.add(indexName);
+    } catch (e) {
+      if (e.code === 'ER_DUP_KEYNAME') {
+        console.warn(`[Sync] Index "${indexName}" already exists on "${tableName}" (duplicate name).`);
+        continue;
+      }
+      const wrapped = new Error(
+        `Failed to add index "${indexName}" on global table "${tableName}". ${e?.message || ''}`
+      );
+      wrapped.code = e?.code;
+      wrapped.originalError = e;
+      throw wrapped;
+    }
+  }
 };
 
 /**
@@ -354,12 +507,6 @@ const getUniqueKeyColumns = async (tableName) => {
 const TABLE_MATCH_KEY_FALLBACK = {
   Products: ['ProductCode', 'store_id']
 };
-
-/**
- * Tables that must always be compared with global (not watermark). Ensures every sync pushes new/changed rows
- * even if updated_at is missing or watermark would skip them. Use for critical tables like bills.
- */
-const ALWAYS_COMPARE_TABLES = new Set(['bills', 'bill_items']);
 
 /**
  * Get the preferred match key for a table: use UNIQUE key(s) so client and global match by same business key.
@@ -419,14 +566,12 @@ const buildInsertSql = (tableName, columns) => {
 /**
  * POST /api/backup-and-upload
  *
- * Endpoint to create backup in Docker volume, read the file,
- * and push it to Global DB as BLOB.
- * 
  * Flow:
- * 1. Create .sql backup in Docker volume (/backups/)
- * 2. Copy file from container to host temp
- * 3. Read file and push to Global DB as BLOB
- * 4. Cleanup temp file
+ * 1. mysqldump into Docker volume, optional restore to local DB
+ * 2. Copy .sql to host temp
+ * 3. Store backup BLOB in global `db_backups`
+ * 4. Run row-level sync (same as /api/sync-to-global/stream): inserts/updates server tables
+ * 5. Cleanup temp file
  */
 export const backupAndUpload = async (req, res) => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
@@ -647,13 +792,64 @@ export const backupAndUpload = async (req, res) => {
         }
 
         /* ----------------------------------------------------
-           ✅ SUCCESS
+           4️⃣ Row-level sync into global tables (new/changed rows)
         ---------------------------------------------------- */
+        let syncFinal = null;
+        const syncSendEvent = (p) => {
+          if (p.status === 'running' && p.message) {
+            console.log(`[Backup→Sync] ${p.message}`);
+          }
+          if (p.status === 'success' || p.status === 'error' || p.status === 'cancelled') {
+            syncFinal = p;
+          }
+        };
+        const syncReq = { query: {}, aborted: false };
+        try {
+          await runRowLevelSyncToGlobal(syncSendEvent, syncReq);
+        } catch (syncErr) {
+          console.error("[Backup] Row-level sync failed:", syncErr);
+          return res.status(500).json({
+            success: false,
+            step: "sync_to_global",
+            error: syncErr.message || "Row-level sync failed after backup",
+            backupStored: true,
+            filename: path.basename(containerBackup),
+            size: fileSize,
+          });
+        }
+        if (!syncFinal || syncFinal.status === "error") {
+          return res.status(500).json({
+            success: false,
+            step: "sync_to_global",
+            error: syncFinal?.message || "Row-level sync failed",
+            backupStored: true,
+            filename: path.basename(containerBackup),
+            size: fileSize,
+          });
+        }
+        if (syncFinal.status === "cancelled") {
+          return res.status(500).json({
+            success: false,
+            step: "sync_to_global",
+            error: syncFinal.message || "Sync cancelled",
+            backupStored: true,
+            filename: path.basename(containerBackup),
+            size: fileSize,
+          });
+        }
+
         return res.json({
           success: true,
-          message: "Backup created, restored to local DB, and pushed to Global DB",
+          message:
+            "Backup stored in global DB; server tables updated with new/changed rows.",
           filename: path.basename(containerBackup),
           size: fileSize,
+          sync: {
+            insertedRecords: syncFinal.insertedRecords ?? 0,
+            updatedRecords: syncFinal.updatedRecords ?? 0,
+            syncedRecords: syncFinal.syncedRecords ?? 0,
+            totalRecords: syncFinal.totalRecords ?? 0,
+          },
         });
       } catch (dbError) {
         console.error("❌ Database error:", dbError);
@@ -728,48 +924,18 @@ export const startSyncToGlobal = async (req, res) => {
 };
 
 /**
- * GET /api/sync-to-global/stream
+ * Row-level sync: local MySQL → global MySQL.
+ * Used by GET /api/sync-to-global/stream (SSE) and POST /api/backup-and-upload.
  *
- * SSE endpoint that:
- * - Reads all data from the LOCAL database (MYSQL_URL via db/index.js)
- * - Ensures GLOBAL tables exist (creates from LOCAL schema if missing; FKs stripped)
- * - Inserts ONLY new rows into GLOBAL (INSERT IGNORE via PK/UNIQUE); skips existing
- * - Never modifies LOCAL. Uses MYSQL_GLOBAL_URL for GLOBAL.
+ * Default: incremental sync — watermark on updated_at when present; rows identical to global are skipped (no UPDATE).
+ * Full scan of every row: SYNC_FULL_SYNC / FORCE_FULL_SYNC / ?full=1 (slower; first sync / repair).
+ * Schema: missing columns + indexes are added on global. Row/table errors abort the whole sync.
  *
- * Event payload:
- * {
- *   progress: number,          // 0-100 (processed / total)
- *   totalRecords: number,      // total rows processed
- *   syncedRecords: number,     // rows actually inserted (existing skipped)
- *   status: 'running' | 'success' | 'error' | 'cancelled',
- *   message?: string
- * }
+ * SSE event payload:
+ * { progress, totalRecords, syncedRecords, insertedRecords, updatedRecords,
+ *   status: 'running' | 'success' | 'error' | 'cancelled', message?, sessionId?, tableSummary? }
  */
-export const streamSyncToGlobal = async (req, res) => {
-  // Ensure persistent connection for SSE
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  // Disable response buffering in some proxies (e.g. Nginx)
-  res.setHeader('X-Accel-Buffering', 'no');
-
-  // Flush headers if supported by the runtime
-  if (typeof res.flushHeaders === 'function') {
-    res.flushHeaders();
-  }
-
-  const sendEvent = (payload) => {
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  };
-
-  const closeStream = () => {
-    try {
-      res.end();
-    } catch {
-      // ignore
-    }
-  };
-
+async function runRowLevelSyncToGlobal(sendEvent, req) {
   let lastProgress = 0;
   let syncedRecords = 0;
   let insertedRecords = 0;
@@ -809,7 +975,7 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'error',
         message: 'Local application database is not configured. Please set MYSQL_URL in .env file.'
       });
-      return closeStream();
+      return;
     }
 
     if (!isGlobalDbConfigured()) {
@@ -822,7 +988,7 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'error',
         message: 'Global database is not configured. Please set MYSQL_GLOBAL_HOST, MYSQL_GLOBAL_USER, MYSQL_GLOBAL_PASSWORD, and MYSQL_GLOBAL_DATABASE in .env file.'
       });
-      return closeStream();
+      return;
     }
 
     // Test global database connection before proceeding
@@ -872,7 +1038,7 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'error',
         message: connErrorMessage
       });
-      return closeStream();
+      return;
     }
 
     // Step 1: Discover all local tables and their primary keys.
@@ -891,7 +1057,7 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'error',
         message: 'Failed to list local database tables. See server logs.'
       });
-      return closeStream();
+      return;
     }
 
     if (tableNames.length === 0) {
@@ -904,12 +1070,12 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'success',
         message: 'No tables found in local database to sync.'
       });
-      return closeStream();
+      return;
     }
 
     log(`Discovered ${tableNames.length} table(s) in local DB: ${tableNames.join(', ')}`);
 
-    // Step 2: Ensure all tables exist in GLOBAL DB (schema from LOCAL). Skip tables with no PK for row sync.
+    // Step 2: Ensure all tables exist in GLOBAL DB (schema from LOCAL). Align indexes; never skip tables without PK if a UNIQUE key or replace-all applies.
     const tablesWithPk = [];
     for (const tableName of tableNames) {
       try {
@@ -925,7 +1091,7 @@ export const streamSyncToGlobal = async (req, res) => {
             status: 'error',
             message: `Local table "${tableName}" does not exist. Please verify the schema.`
           });
-          return closeStream();
+          return;
         }
         
         // Log detailed error information
@@ -965,30 +1131,56 @@ export const streamSyncToGlobal = async (req, res) => {
           status: 'error',
           message: errorMessage
         });
-        return closeStream();
+        return;
       }
 
       const pkCols = await getPrimaryKeyColumns(tableName);
-      const matchKeyFallback = TABLE_MATCH_KEY_FALLBACK[tableName] || null;
-      if (pkCols.length === 0 && !matchKeyFallback) {
-        log(`Skipping table "${tableName}" (no primary key and no match-key fallback).`);
-        continue;
+      const manualFallback = TABLE_MATCH_KEY_FALLBACK[tableName] || null;
+      const prefMk = await getPreferredMatchKey(tableName);
+      const uniqueWhere =
+        prefMk.whereColumns && prefMk.whereColumns.length > 0 ? prefMk.whereColumns : null;
+      const effectiveMatchKey = uniqueWhere || manualFallback || null;
+
+      if (pkCols.length === 0 && !effectiveMatchKey) {
+        log(
+          `Table "${tableName}": no PRIMARY KEY and no UNIQUE / fallback key — will DELETE all global rows then INSERT from local (mirror).`
+        );
+        tablesWithPk.push({
+          tableName,
+          pkColumns: pkCols,
+          matchKeyFallback: null,
+          replaceEntireTable: true,
+          forcedWhereColumns: null
+        });
+      } else {
+        tablesWithPk.push({
+          tableName,
+          pkColumns: pkCols,
+          matchKeyFallback: manualFallback,
+          replaceEntireTable: false,
+          forcedWhereColumns: pkCols.length === 0 && effectiveMatchKey ? effectiveMatchKey : null
+        });
       }
-      tablesWithPk.push({ tableName, pkColumns: pkCols, matchKeyFallback });
     }
 
+    const pushAllLocalRows = isFullSyncRequested(req);
+    const incrementalSync = !pushAllLocalRows;
+
     // Step 3: Build sync plan.
-    // Default (incremental): only new/updated data is pushed. Tables with updated_at use watermark; others compare with global and push only new/changed rows.
-    // FORCE_FULL_SYNC or ?full=true: compare every table with global and push all new/changed (use for first sync or when global was empty).
-    const forceFullSync = process.env.FORCE_FULL_SYNC === 'true' || process.env.FORCE_FULL_SYNC === '1' || (req.query && (req.query.full === 'true' || req.query.full === '1'));
-    if (forceFullSync) {
-      log('Full sync mode: will compare every table with global and push all new/changed rows (empty global table => push all local data).');
+    if (incrementalSync) {
+      log('Incremental sync: watermark where updated_at exists; candidate rows compared to global — unchanged rows are not written.');
     } else {
-      log('Incremental sync: only new or updated rows will be pushed (tables with updated_at use watermark; others compare with global).');
+      log('Full sync: every local row is written (no watermark / no unchanged skip). Use only when needed — slower.');
     }
     totalRecords = 0;
     const tableCounts = [];
-    for (const { tableName, pkColumns, matchKeyFallback } of tablesWithPk) {
+    for (const {
+      tableName,
+      pkColumns,
+      matchKeyFallback,
+      replaceEntireTable,
+      forcedWhereColumns
+    } of tablesWithPk) {
       try {
         const fullCountRows = await queryLocalDb(`SELECT COUNT(*) AS cnt FROM \`${tableName}\``, []);
         const fullCount = Number(Array.isArray(fullCountRows) && fullCountRows[0] ? fullCountRows[0].cnt : 0) || 0;
@@ -998,18 +1190,23 @@ export const streamSyncToGlobal = async (req, res) => {
         let useWatermark = false;
         let lastSyncedAt = null;
 
-        if (!forceFullSync && timestampCol) {
+        if (incrementalSync && !replaceEntireTable && timestampCol) {
           lastSyncedAt = await getWatermark(tableName);
-          const safeTs = lastSyncedAt ? String(lastSyncedAt).replace(/'/g, "''") : '1970-01-01 00:00:00';
           const countRows = await queryLocalDb(
             `SELECT COUNT(*) AS cnt FROM \`${tableName}\` WHERE \`${timestampCol}\` > ?`,
             [lastSyncedAt || '1970-01-01 00:00:00']
           );
           countToSync = Number(Array.isArray(countRows) && countRows[0] ? countRows[0].cnt : 0) || 0;
           useWatermark = true;
-          if (countToSync > 0) log(`Local DB: table "${tableName}" has ${countToSync} row(s) changed since last sync (${timestampCol} > ${lastSyncedAt || 'start'})`);
+          if (countToSync > 0) {
+            log(
+              `Local DB: table "${tableName}" has ${countToSync} row(s) changed since last sync (${timestampCol} > ${lastSyncedAt || 'start'})`
+            );
+          }
         } else if (fullCount > 0) {
-          log(`Local DB: table "${tableName}" has ${fullCount} record(s)${forceFullSync ? ' (full sync – compare with global, push all new/changed)' : ' (no updated_at – will compare with global, push only changed)'}`);
+          log(
+            `Local DB: table "${tableName}" has ${fullCount} record(s)${pushAllLocalRows ? ' (all rows will be pushed)' : ''}`
+          );
         }
 
         tableCounts.push({
@@ -1020,7 +1217,9 @@ export const streamSyncToGlobal = async (req, res) => {
           lastSyncedAt,
           timestampCol,
           pkColumns,
-          matchKeyFallback
+          matchKeyFallback,
+          replaceEntireTable,
+          forcedWhereColumns
         });
         totalRecords += useWatermark ? countToSync : fullCount;
       } catch (error) {
@@ -1034,13 +1233,13 @@ export const streamSyncToGlobal = async (req, res) => {
             status: 'error',
             message: `Local table "${tableName}" not found. Verify schema.`
           });
-          return closeStream();
+          return;
         }
         throw error;
       }
     }
 
-    if (totalRecords === 0) {
+    if (totalRecords === 0 && !tableCounts.some((t) => t.replaceEntireTable)) {
       log('No records in local DB. Nothing to sync.');
       sendEvent({
         progress: 100,
@@ -1052,7 +1251,7 @@ export const streamSyncToGlobal = async (req, res) => {
         status: 'success',
         message: 'No records found in local database. Nothing to sync.'
       });
-      return closeStream();
+      return;
     }
 
     // Resumable sync: session_id allows resume after disconnect
@@ -1063,11 +1262,11 @@ export const streamSyncToGlobal = async (req, res) => {
       const session = Array.isArray(sessionRows) && sessionRows.length > 0 ? sessionRows[0] : null;
       if (!session) {
         sendEvent({ progress: 0, totalRecords, syncedRecords: 0, insertedRecords: 0, updatedRecords: 0, status: 'error', message: 'Invalid or expired session. Start a new sync.' });
-        return closeStream();
+        return;
       }
       if (session.status === 'completed') {
         sendEvent({ progress: 100, totalRecords, syncedRecords: totalRecords, insertedRecords: 0, updatedRecords: 0, sessionId, status: 'success', message: 'Sync already completed for this session.' });
-        return closeStream();
+        return;
       }
       const completedRows = await queryGlobalDb('SELECT table_name FROM sync_session_tables WHERE session_id = ?', [sessionId]);
       const completedSet = new Set((Array.isArray(completedRows) ? completedRows : []).map((r) => r.table_name));
@@ -1085,7 +1284,7 @@ export const streamSyncToGlobal = async (req, res) => {
       sessionId = insertResult && insertResult.insertId != null ? String(insertResult.insertId) : null;
       if (!sessionId) {
         sendEvent({ progress: 0, totalRecords, syncedRecords: 0, insertedRecords: 0, updatedRecords: 0, status: 'error', message: 'Failed to create sync session.' });
-        return closeStream();
+        return;
       }
       log(`New sync session ${sessionId}.`);
     }
@@ -1112,8 +1311,134 @@ export const streamSyncToGlobal = async (req, res) => {
     const SYNC_BATCH_COMMIT_ROWS = Number(process.env.SYNC_BATCH_COMMIT_ROWS) || 300;
 
     try {
-      tableLoop: for (const tbl of tableCounts) {
-        const { tableName, count: tableCount, useWatermark, lastSyncedAt, timestampCol, pkColumns, fullCount } = tbl;
+      const stopSyncWithError = async (message) => {
+        try {
+          await connection.rollback();
+        } catch (_) {}
+        await queryGlobalDb('UPDATE sync_sessions SET status = ? WHERE id = ?', ['failed', sessionId]).catch(() => {});
+        sendEvent({
+          progress: lastProgress,
+          totalRecords,
+          syncedRecords,
+          insertedRecords,
+          updatedRecords,
+          tableSummary,
+          status: 'error',
+          message
+        });
+      };
+
+      for (const tbl of tableCounts) {
+        const {
+          tableName,
+          count: tableCount,
+          useWatermark,
+          lastSyncedAt,
+          timestampCol,
+          pkColumns,
+          fullCount,
+          matchKeyFallback,
+          replaceEntireTable,
+          forcedWhereColumns
+        } = tbl;
+
+        /* No PK and no UNIQUE: mirror local by deleting global rows then inserting (order must respect FKs). */
+        if (replaceEntireTable) {
+          await connection.beginTransaction();
+          let fkChecksDisabled = false;
+          try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 0');
+            fkChecksDisabled = true;
+            await connection.query(`DELETE FROM \`${tableName}\``);
+          } catch (delErr) {
+            if (fkChecksDisabled) {
+              try {
+                await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+              } catch (_) {}
+            }
+            await connection.rollback();
+            await stopSyncWithError(
+              `Sync stopped: cannot clear global table "${tableName}". ${delErr.message || String(delErr)}`
+            );
+            return;
+          }
+          let toInsert;
+          try {
+            const rows = await queryLocalDb(`SELECT * FROM \`${tableName}\``, []);
+            toInsert = Array.isArray(rows) ? rows : [];
+          } catch (loadErr) {
+            try {
+              await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+            } catch (_) {}
+            await connection.rollback();
+            await stopSyncWithError(
+              `Sync stopped: cannot read local table "${tableName}". ${loadErr.message || String(loadErr)}`
+            );
+            return;
+          }
+          const toValReplace = (v) => {
+            if (v === null || v === undefined) return v;
+            if (typeof v === 'object' && !(v instanceof Date) && !Buffer.isBuffer(v)) return JSON.stringify(v);
+            return v;
+          };
+          let tableInserted = 0;
+          for (const row of toInsert) {
+            if (req.aborted) {
+              try {
+                await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+              } catch (_) {}
+              try {
+                await connection.rollback();
+              } catch (_) {}
+              sendEvent({
+                progress: lastProgress,
+                totalRecords,
+                syncedRecords,
+                insertedRecords,
+                updatedRecords,
+                tableSummary,
+                status: 'cancelled',
+                message: 'Client disconnected. Sync cancelled.'
+              });
+              return;
+            }
+            const columns = Object.keys(row || {}).filter((c) => row[c] !== undefined);
+            if (!columns.length) continue;
+            try {
+              const insertSql = buildInsertSql(tableName, columns);
+              const allValues = columns.map((c) => toValReplace(row[c]));
+              await connection.query(insertSql, allValues);
+              tableInserted += 1;
+              insertedRecords += 1;
+              syncedRecords += 1;
+            } catch (insErr) {
+              try {
+                await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+              } catch (_) {}
+              await connection.rollback();
+              await stopSyncWithError(
+                `Sync stopped on "${tableName}" (full replace): ${insErr.message || String(insErr)}`
+              );
+              return;
+            }
+            processedRecords += 1;
+            lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
+            sendProgress();
+          }
+          try {
+            await connection.query('SET FOREIGN_KEY_CHECKS = 1');
+          } catch (_) {}
+          await connection.commit();
+          await queryGlobalDb('INSERT INTO sync_session_tables (session_id, table_name) VALUES (?, ?)', [
+            sessionId,
+            tableName
+          ]);
+          tableSummary.push({ tableName, total: toInsert.length, inserted: tableInserted, updated: 0 });
+          log(`Table "${tableName}": replace-all complete (${tableInserted} row(s) inserted).`);
+          sendProgress();
+          continue;
+        }
+
         if (tableCount === 0) {
           processedRecords += fullCount ?? 0;
           lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
@@ -1137,33 +1462,46 @@ export const streamSyncToGlobal = async (req, res) => {
             localRows = Array.isArray(rows) ? rows : [];
           }
         } catch (error) {
-          try { await connection.rollback(); } catch (_) {}
-          try { connection.release(); } catch (_) {}
+          try {
+            await connection.rollback();
+          } catch (_) {}
           if (error.code === 'ER_NO_SUCH_TABLE') {
-            sendEvent({
-              progress: lastProgress,
-              totalRecords,
-              syncedRecords,
-              insertedRecords,
-              updatedRecords,
-              tableSummary,
-              status: 'error',
-              message: `Local table "${tableName}" not found during sync.`
-            });
-            return closeStream();
+            await stopSyncWithError(`Local table "${tableName}" not found during sync.`);
+            return;
           }
-          throw error;
+          await stopSyncWithError(error?.message || String(error));
+          return;
         }
 
         const pkSet = pkByTable.get(tableName) || new Set((pkColumns || []).map((k) => String(k).toLowerCase()));
         const matchKey = await getPreferredMatchKey(tableName);
-        const whereColumns = (matchKey.whereColumns && matchKey.whereColumns.length > 0)
-          ? matchKey.whereColumns
-          : (tbl.matchKeyFallback || (pkColumns && pkColumns.length > 0 ? pkColumns : ['id']));
+        const whereColumns =
+          forcedWhereColumns && forcedWhereColumns.length > 0
+            ? forcedWhereColumns
+            : matchKey.whereColumns && matchKey.whereColumns.length > 0
+              ? matchKey.whereColumns
+              : matchKeyFallback || (pkColumns && pkColumns.length > 0 ? pkColumns : ['id']);
         const singlePk = pkColumns && pkColumns.length === 1 ? pkColumns[0] : null;
 
+        let maxTsForWatermark = null;
+        if (useWatermark && timestampCol && localRows.length > 0) {
+          for (const r of localRows) {
+            const t = r[timestampCol];
+            if (t != null && (maxTsForWatermark == null || t > maxTsForWatermark)) {
+              maxTsForWatermark = t;
+            }
+          }
+        }
+
         let rowsToPush = localRows;
-        if (!useWatermark && singlePk && localRows.length > 0) {
+        if (pushAllLocalRows) {
+          rowsToPush = localRows;
+          if (localRows.length > 0) {
+            processedRecords += localRows.length;
+            lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
+            sendProgress();
+          }
+        } else if (singlePk && localRows.length > 0) {
           rowsToPush = [];
           for (let i = 0; i < localRows.length; i += BATCH_SIZE) {
             const batch = localRows.slice(i, i + BATCH_SIZE);
@@ -1184,7 +1522,12 @@ export const streamSyncToGlobal = async (req, res) => {
             lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
             sendProgress();
           }
-        } else if (!useWatermark && whereColumns.length > 0 && localRows.length > 0) {
+          if (rowsToPush.length < localRows.length && localRows.length > 0) {
+            log(
+              `Table "${tableName}": ${rowsToPush.length} row(s) to write (new/changed), ${localRows.length - rowsToPush.length} unchanged vs global.`
+            );
+          }
+        } else if (whereColumns.length > 0 && localRows.length > 0) {
           rowsToPush = [];
           for (let i = 0; i < localRows.length; i += BATCH_SIZE) {
             const batch = localRows.slice(i, i + BATCH_SIZE);
@@ -1208,9 +1551,11 @@ export const streamSyncToGlobal = async (req, res) => {
             sendProgress();
           }
           if (rowsToPush.length < localRows.length && localRows.length > 0) {
-            log(`Table "${tableName}": pushing ${rowsToPush.length} changed/new row(s) of ${localRows.length} total.`);
+            log(
+              `Table "${tableName}": ${rowsToPush.length} row(s) to write (new/changed), ${localRows.length - rowsToPush.length} unchanged vs global.`
+            );
           }
-        } else if (!useWatermark) {
+        } else if (!pushAllLocalRows) {
           rowsToPush = localRows;
           processedRecords += localRows.length;
           lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
@@ -1219,7 +1564,6 @@ export const streamSyncToGlobal = async (req, res) => {
 
         let tableInserted = 0;
         let tableUpdated = 0;
-        let maxTs = null;
         const PROGRESS_EVERY = 100;
         const LOG_EVERY = 1000;
         let rowIndex = 0;
@@ -1231,8 +1575,9 @@ export const streamSyncToGlobal = async (req, res) => {
             log(`[Sync] Table "${tableName}": ${rowIndex}/${rowsToPush.length} rows written.`);
           }
           if (req.aborted) {
-            try { await connection.rollback(); } catch (_) {}
-            try { connection.release(); } catch (_) {}
+            try {
+              await connection.rollback();
+            } catch (_) {}
             sendEvent({
               progress: lastProgress,
               totalRecords,
@@ -1243,7 +1588,7 @@ export const streamSyncToGlobal = async (req, res) => {
               status: 'cancelled',
               message: 'Client disconnected. Sync cancelled.'
             });
-            return closeStream();
+            return;
           }
 
           const columns = Object.keys(row || {}).filter((c) => row[c] !== undefined);
@@ -1252,10 +1597,6 @@ export const streamSyncToGlobal = async (req, res) => {
             lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
             sendProgress();
             continue;
-          }
-
-          if (timestampCol && row[timestampCol] && (maxTs == null || row[timestampCol] > maxTs)) {
-            maxTs = row[timestampCol];
           }
 
           const toVal = (v) => {
@@ -1349,10 +1690,7 @@ export const streamSyncToGlobal = async (req, res) => {
               }
             }
           } catch (err) {
-            try { await connection.rollback(); } catch (_) {}
             console.error(`Sync write failed for table "${tableName}":`, err);
-            processedRecords += rowsToPush.length;
-            lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
             tableSummary.push({
               tableName,
               total: rowsToPush.length,
@@ -1360,19 +1698,10 @@ export const streamSyncToGlobal = async (req, res) => {
               updated: tableUpdated,
               error: err.message || String(err)
             });
-            log(`Table "${tableName}": skipped due to error (${tableInserted} inserted, ${tableUpdated} updated before error). Continuing with remaining tables.`);
-            sendEvent({
-              progress: lastProgress,
-              totalRecords,
-              syncedRecords,
-              insertedRecords,
-              updatedRecords,
-              tableSummary,
-              status: 'running',
-              message: `Error syncing "${tableName}". Continuing with remaining tables.`
-            });
-            sendProgress();
-            continue tableLoop;
+            await stopSyncWithError(
+              `Sync stopped on table "${tableName}" (${tableInserted} inserted, ${tableUpdated} updated before error): ${err.message || String(err)}`
+            );
+            return;
           }
 
           if (rowIndex > 0 && rowIndex % SYNC_BATCH_COMMIT_ROWS === 0) {
@@ -1380,10 +1709,7 @@ export const streamSyncToGlobal = async (req, res) => {
               await connection.commit();
               await connection.beginTransaction();
             } catch (batchErr) {
-              try { await connection.rollback(); } catch (_) {}
               console.error(`Sync batch commit failed for table "${tableName}":`, batchErr);
-              processedRecords += rowsToPush.length - rowIndex + 1;
-              lastProgress = totalRecords > 0 ? Math.min(100, Math.round((processedRecords / totalRecords) * 100)) : 0;
               tableSummary.push({
                 tableName,
                 total: rowsToPush.length,
@@ -1391,19 +1717,10 @@ export const streamSyncToGlobal = async (req, res) => {
                 updated: tableUpdated,
                 error: batchErr.message || String(batchErr)
               });
-              log(`Table "${tableName}": skipped after batch commit error. Continuing with remaining tables.`);
-              sendEvent({
-                progress: lastProgress,
-                totalRecords,
-                syncedRecords,
-                insertedRecords,
-                updatedRecords,
-                tableSummary,
-                status: 'running',
-                message: `Batch commit failed for "${tableName}". Continuing with remaining tables.`
-              });
-              sendProgress();
-              continue tableLoop;
+              await stopSyncWithError(
+                `Sync stopped on "${tableName}" (batch commit failed): ${batchErr.message || String(batchErr)}`
+              );
+              return;
             }
           }
 
@@ -1412,17 +1729,20 @@ export const streamSyncToGlobal = async (req, res) => {
           sendProgress();
         }
 
-        if (useWatermark && maxTs != null) {
-          await setWatermark(tableName, maxTs);
+        if (incrementalSync && useWatermark && maxTsForWatermark != null) {
+          await setWatermark(tableName, maxTsForWatermark);
         }
 
         tableSummary.push({
           tableName,
           total: rowsToPush.length,
+          candidates: localRows.length,
           inserted: tableInserted,
           updated: tableUpdated
         });
-        log(`Table "${tableName}": pushed ${rowsToPush.length} row(s) (inserted ${tableInserted}, updated ${tableUpdated})`);
+        log(
+          `Table "${tableName}": wrote ${tableInserted} insert(s), ${tableUpdated} update(s) from ${rowsToPush.length} candidate row(s) (${localRows.length} loaded).`
+        );
 
         await connection.commit();
         await queryGlobalDb('INSERT INTO sync_session_tables (session_id, table_name) VALUES (?, ?)', [sessionId, tableName]);
@@ -1445,7 +1765,9 @@ export const streamSyncToGlobal = async (req, res) => {
       }
     }
 
-    const summaryMessage = `Incremental sync completed: only changed/new rows were pushed. ${insertedRecords} inserted, ${updatedRecords} updated (${syncedRecords} total rows written to global DB).`;
+    const summaryMessage = incrementalSync
+      ? `Incremental sync completed (unchanged rows skipped). ${insertedRecords} inserted, ${updatedRecords} updated (${syncedRecords} rows written to global DB).`
+      : `Full sync completed (every row written). ${insertedRecords} inserted, ${updatedRecords} updated (${syncedRecords} rows written to global DB).`;
     log(summaryMessage, { totalRecords, insertedRecords, updatedRecords, tableSummary });
     
     // Create backups for both client and server databases
@@ -1510,10 +1832,8 @@ export const streamSyncToGlobal = async (req, res) => {
       status: 'success',
       message: summaryMessage
     });
-
-    closeStream();
   } catch (error) {
-    console.error('Error during sync-to-global stream:', error);
+    console.error('Error during row-level sync to global:', error);
 
     const safeProgress = typeof lastProgress === 'number' && !Number.isNaN(lastProgress)
       ? lastProgress
@@ -1530,7 +1850,51 @@ export const streamSyncToGlobal = async (req, res) => {
       status: 'error',
       message: error?.message || 'Sync failed. See server logs for details.'
     });
+  }
+}
 
+/**
+ * GET /api/sync-to-global/stream — Server-Sent Events for row-level sync progress.
+ */
+export const streamSyncToGlobal = async (req, res) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof res.flushHeaders === 'function') {
+    res.flushHeaders();
+  }
+
+  const sendEvent = (payload) => {
+    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+  };
+
+  const closeStream = () => {
+    try {
+      res.end();
+    } catch {
+      // ignore
+    }
+  };
+
+  try {
+    await runRowLevelSyncToGlobal(sendEvent, req);
+  } catch (error) {
+    console.error('Error during sync-to-global stream:', error);
+    try {
+      sendEvent({
+        progress: 0,
+        totalRecords: 0,
+        syncedRecords: 0,
+        insertedRecords: 0,
+        updatedRecords: 0,
+        status: 'error',
+        message: error?.message || 'Sync failed. See server logs for details.'
+      });
+    } catch (_) {
+      /* response may already be closed */
+    }
+  } finally {
     closeStream();
   }
 };
