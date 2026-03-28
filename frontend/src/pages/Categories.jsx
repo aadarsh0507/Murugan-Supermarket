@@ -3,7 +3,6 @@ import { motion } from "framer-motion";
 import { 
   Plus, 
   Search, 
-  Trash2, 
   Package, 
   Filter, 
   Eye,
@@ -562,38 +561,6 @@ const Categories = () => {
     setCreatedItems([]);
   };
 
-  // Function to add subcategories to existing category
-  const handleAddSubcategoriesToCategory = (category) => {
-    setCurrentStep(2);
-    setCreatedCategory(category);
-    setCreatedSubcategories([]);
-    setCreatedItems([]);
-    setMultiStepData({
-      category: { name: category.name },
-      subcategories: [{ name: "" }], // Start with one subcategory
-      currentSubcategoryIndex: 0,
-      item: {
-        name: "",
-        sku: "",
-        description: "",
-        price: "",
-        cost: "",
-        stock: 0,
-        minStock: 0,
-        maxStock: "",
-        unit: "",
-        weight: "",
-        barcode: "",
-        tags: [],
-        isActive: true,
-        isDigital: false,
-        requiresPrescription: false,
-        expiryDate: ""
-      }
-    });
-    setIsMultiStepModal(true);
-  };
-
   // Function to add items to existing subcategory
   const handleAddItemsToSubcategory = (category, subcategory) => {
     setCurrentStep(3);
@@ -734,14 +701,6 @@ const Categories = () => {
                         {category.items.length} item(s) • Stock: {category.items.reduce((sum, item) => sum + (item.stock || 0), 0)}
                       </p>
                     )}
-                    {level === 0 && (
-                      <p className="text-sm text-gray-500">
-                        {category.subcategories && category.subcategories.length > 0 
-                          ? `${category.subcategories.length} subcategory(ies) • ${category.subcategories.reduce((sum, sub) => sum + (sub.items ? sub.items.length : 0), 0)} total items`
-                          : 'No subcategories yet • Click "Add Subcategories" to create'
-                        }
-                      </p>
-                    )}
                   </div>
                 </div>
               </div>
@@ -758,14 +717,6 @@ const Categories = () => {
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {level === 0 && (
-                      <>
-                        <DropdownMenuItem onClick={() => handleAddSubcategoriesToCategory(category)}>
-                          <Plus className="h-4 w-4 mr-2" />
-                          Add Subcategories
-                        </DropdownMenuItem>
-                      </>
-                    )}
                     {level === 1 && (
                       <DropdownMenuItem onClick={() => {
                         // Find the parent category that contains this subcategory
@@ -787,13 +738,6 @@ const Categories = () => {
                         <Eye className="h-4 w-4 mr-2" />
                       )}
                       {category.isActive ? "Deactivate" : "Activate"}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem 
-                      onClick={() => handleDeleteCategory(category)}
-                      className="text-red-600"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -848,7 +792,7 @@ const Categories = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Categories</h1>
-          <p className="text-gray-600 mt-1">Manage product categories and subcategories</p>
+          <p className="text-gray-600 mt-1">Manage product categories</p>
         </div>
         <div className="flex items-center space-x-2">
           <Button onClick={openCreateCategory} className="flex items-center space-x-2">

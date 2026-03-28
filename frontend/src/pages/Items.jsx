@@ -3108,94 +3108,77 @@ export default function Items() {
               </div>
             </div>
 
-            {/* Category and Subcategory */}
+            {/* Category (subcategory stays on the item for APIs/brands; change it from Subcategories master if needed) */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Category & Subcategory</h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="edit-item-category">Category</Label>
-                  <Popover open={editCategoryPopoverOpen} onOpenChange={setEditCategoryPopoverOpen}>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        role="combobox"
-                        aria-expanded={editCategoryPopoverOpen}
-                        className="w-full justify-between"
-                      >
-                        {getCategoryLabel(editForm.categoryId) ?? "Select category..."}
-                        <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-[280px] p-0" align="start">
-                      <Command>
-                        <CommandInput
-                          placeholder="Search category..."
-                          value={editCategorySearchTerm}
-                          onValueChange={setEditCategorySearchTerm}
-                        />
-                        <CommandList>
-                          <CommandEmpty>No category found.</CommandEmpty>
-                          <CommandGroup>
-                            {categoryHierarchy.map((category) => {
-                              const categoryId = String(category._id ?? category.id);
-                              const isSelected = String(editForm.categoryId || "") === categoryId;
-                              const searchValue = `${category.name} ${category.code || ""}`.trim();
-                              return (
-                                <CommandItem
-                                  key={`edit-category-${categoryId}`}
-                                  value={searchValue}
-                                  onSelect={() => {
-                                    setEditForm((prev) => ({
+              <h3 className="text-lg font-semibold">Category</h3>
+              <div className="space-y-2">
+                <Label htmlFor="edit-item-category">Category</Label>
+                <Popover open={editCategoryPopoverOpen} onOpenChange={setEditCategoryPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      aria-expanded={editCategoryPopoverOpen}
+                      className="w-full justify-between"
+                    >
+                      {getCategoryLabel(editForm.categoryId) ?? "Select category..."}
+                      <ChevronDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[280px] p-0" align="start">
+                    <Command>
+                      <CommandInput
+                        placeholder="Search category..."
+                        value={editCategorySearchTerm}
+                        onValueChange={setEditCategorySearchTerm}
+                      />
+                      <CommandList>
+                        <CommandEmpty>No category found.</CommandEmpty>
+                        <CommandGroup>
+                          {categoryHierarchy.map((category) => {
+                            const categoryId = String(category._id ?? category.id);
+                            const isSelected = String(editForm.categoryId || "") === categoryId;
+                            const searchValue = `${category.name} ${category.code || ""}`.trim();
+                            return (
+                              <CommandItem
+                                key={`edit-category-${categoryId}`}
+                                value={searchValue}
+                                onSelect={() => {
+                                  const subcats = category.subcategories || [];
+                                  setEditForm((prev) => {
+                                    const stillValid = subcats.some(
+                                      (s) => String(s._id ?? s.id) === String(prev.subcategoryId)
+                                    );
+                                    const nextSub = stillValid
+                                      ? prev.subcategoryId
+                                      : subcats[0]
+                                        ? String(subcats[0]._id ?? subcats[0].id)
+                                        : "";
+                                    return {
                                       ...prev,
                                       categoryId,
-                                      subcategoryId: ""
-                                    }));
-                                    setEditCategoryPopoverOpen(false);
-                                    setEditCategorySearchTerm("");
-                                  }}
-                                >
-                                  <Check
-                                    className={cn(
-                                      "mr-2 h-4 w-4",
-                                      isSelected ? "opacity-100" : "opacity-0"
-                                    )}
-                                  />
-                                  {category.name}
-                                </CommandItem>
-                              );
-                            })}
-                          </CommandGroup>
-                        </CommandList>
-                      </Command>
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                {editForm.categoryId && (
-                  <div className="space-y-2">
-                    <Label htmlFor="edit-item-subcategory">Subcategory</Label>
-                    <Select
-                      value={editForm.subcategoryId || ""}
-                      onValueChange={(value) => setEditForm(prev => ({ ...prev, subcategoryId: value }))}
-                    >
-                      <SelectTrigger id="edit-item-subcategory">
-                        <SelectValue placeholder="Select subcategory..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(() => {
-                          const selectedCat = categoryHierarchy.find(
-                            cat => (cat._id || cat.id) === editForm.categoryId
-                          );
-                          const subcategories = selectedCat?.subcategories || [];
-                          return subcategories.map((subcategory) => (
-                            <SelectItem key={subcategory._id || subcategory.id} value={subcategory._id || subcategory.id}>
-                              {subcategory.name}
-                            </SelectItem>
-                          ));
-                        })()}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                )}
+                                      subcategoryId: nextSub,
+                                    };
+                                  });
+                                  setEditCategoryPopoverOpen(false);
+                                  setEditCategorySearchTerm("");
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    isSelected ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                {category.name}
+                              </CommandItem>
+                            );
+                          })}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
               </div>
 
               {/* Brand Selection - Only show after subcategory is selected */}
