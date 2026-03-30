@@ -163,9 +163,75 @@ const ensureUsersTableSchema = async () => {
   }
 };
 
+/** Ensures Brand.subcategory_id exists so brands can link to subcategories (composite id: categoryCode:subCode). */
+const ensureBrandSubcategoryColumn = async () => {
+  if (!databaseName) {
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      ...baseConnectionConfig,
+      database: databaseName
+    });
+
+    const [tableRows] = await connection.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Brand' LIMIT 1`,
+      [databaseName]
+    );
+    if (tableRows.length === 0) {
+      return;
+    }
+
+    const [colRows] = await connection.query(
+      `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Brand' AND COLUMN_NAME = 'subcategory_id'`,
+      [databaseName]
+    );
+    if (colRows.length === 0) {
+      const [storeRows] = await connection.query(
+        `SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Brand' AND COLUMN_NAME = 'store_id'`,
+        [databaseName]
+      );
+      const afterStore = storeRows.length > 0 ? ' AFTER `store_id`' : '';
+
+      await connection.query(
+        `ALTER TABLE \`Brand\` ADD COLUMN \`subcategory_id\` VARCHAR(150) NULL${afterStore}`
+      );
+      console.info('✅ Added missing column Brand.subcategory_id');
+    }
+
+    const [indexRows] = await connection.query(
+      `SELECT INDEX_NAME FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Brand' AND INDEX_NAME = 'idx_brand_subcategory' LIMIT 1`,
+      [databaseName]
+    );
+    if (indexRows.length === 0) {
+      try {
+        await connection.query(`CREATE INDEX idx_brand_subcategory ON \`Brand\` (\`subcategory_id\`)`);
+        console.info('✅ Created index idx_brand_subcategory on Brand.subcategory_id');
+      } catch (idxErr) {
+        if (idxErr.code !== 'ER_DUP_KEYNAME') {
+          throw idxErr;
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to ensure Brand.subcategory_id column:', error.message);
+    throw error;
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+};
+
 try {
   await ensureDatabaseExists();
   await ensureUsersTableSchema();
+  await ensureBrandSubcategoryColumn();
 } catch (error) {
   console.error('Failed to prepare database:', error.message);
   throw error;
