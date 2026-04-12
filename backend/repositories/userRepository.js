@@ -187,6 +187,11 @@ const mapUser = (row, stores = [], selectedStore = null, options = {}) => {
             ? screenDetails.map((screen) => screen.name).filter(Boolean)
             : undefined;
 
+    const numericSelectedStoreId =
+        selected_store_id != null && selected_store_id !== ''
+            ? Number(selected_store_id)
+            : null;
+
     return {
         _id: id,
         id,
@@ -207,8 +212,14 @@ const mapUser = (row, stores = [], selectedStore = null, options = {}) => {
         lastLogin: last_login_at,
         resetPasswordOTP: reset_password_otp,
         resetPasswordOTPExpires: reset_password_otp_expires_at,
+        selectedStoreId:
+            numericSelectedStoreId != null && Number.isFinite(numericSelectedStoreId) && numericSelectedStoreId > 0
+                ? numericSelectedStoreId
+                : null,
         selectedStore: selectedStore || (selected_store_id
-            ? stores.find((store) => store._id === selected_store_id) || null
+            ? stores.find(
+                  (store) => Number(store._id ?? store.id) === Number(selected_store_id)
+              ) || null
             : null),
         stores,
         storeId: storeIdValue ?? null,

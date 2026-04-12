@@ -108,23 +108,70 @@ const ensureOverridesTable = async () => {
     await query(`ALTER TABLE item_overrides ADD COLUMN bogo_offer VARCHAR(255) NULL`);
   }
 
+  const storeIdOverrideCol = await query(`
+    SELECT COLUMN_NAME
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'item_overrides'
+      AND COLUMN_NAME = 'store_id'
+  `);
+  if (!storeIdOverrideCol.length) {
+    try {
+      await query(`
+        ALTER TABLE item_overrides
+        ADD COLUMN store_id BIGINT UNSIGNED NOT NULL DEFAULT 0
+        COMMENT '0=legacy global; use stores.id for per-store overrides'
+        AFTER product_code
+      `);
+    } catch (error) {
+      console.warn('item_overrides store_id column:', error.message);
+    }
+  }
+
+  try {
+    const pkRows = await query(`
+      SELECT COLUMN_NAME
+      FROM information_schema.KEY_COLUMN_USAGE
+      WHERE TABLE_SCHEMA = DATABASE()
+        AND TABLE_NAME = 'item_overrides'
+        AND CONSTRAINT_NAME = 'PRIMARY'
+      ORDER BY ORDINAL_POSITION
+    `);
+    const pkCols = pkRows.map((r) => r.COLUMN_NAME);
+    if (pkCols.length === 1 && pkCols[0] === 'product_code') {
+      await query('ALTER TABLE item_overrides DROP PRIMARY KEY');
+      await query(
+        'ALTER TABLE item_overrides ADD PRIMARY KEY (product_code, store_id)'
+      );
+    }
+  } catch (error) {
+    console.warn('item_overrides composite PK migration:', error.message);
+  }
+
   overridesTableEnsured = true;
+};
+
+/** 0 = legacy / global row; >0 matches stores.id for scoped item_overrides */
+const resolveOverrideStoreId = (storeId) => {
+  const n = Number(storeId);
+  return Number.isFinite(n) && n > 0 ? n : 0;
 };
 
 const buildPlaceholders = (values = []) => {
   return values.map(() => '?').join(', ');
 };
 
-const upsertItemOverride = async (productCode, updates = {}) => {
+const upsertItemOverride = async (productCode, updates = {}, overrideStoreId = 0) => {
   if (!productCode || typeof updates !== 'object' || Object.keys(updates).length === 0) {
     return;
   }
 
   await ensureOverridesTable();
 
-  const columns = ['product_code'];
-  const placeholders = ['?'];
-  const values = [productCode];
+  const storeIdVal = resolveOverrideStoreId(overrideStoreId);
+  const columns = ['product_code', 'store_id'];
+  const placeholders = ['?', '?'];
+  const values = [productCode, storeIdVal];
   const updateAssignments = [];
 
   const addField = (column, value) => {
@@ -162,7 +209,7 @@ const upsertItemOverride = async (productCode, updates = {}) => {
     addField('bogo_offer', updates.bogoOffer ?? null);
   }
 
-  if (columns.length === 1) {
+  if (columns.length <= 2) {
     return;
   }
 
@@ -175,22 +222,54 @@ const upsertItemOverride = async (productCode, updates = {}) => {
   await query(sql, values);
 };
 
-const fetchOverridesForCodes = async (productCodes = []) => {
+const fetchOverridesForCodes = async (productCodes = [], storeId = undefined) => {
   if (!productCodes || productCodes.length === 0) {
     return new Map();
   }
 
   await ensureOverridesTable();
 
-  const rows = await query(
-    `SELECT product_code, sku, name, price, description, image_url, image_file_name, min_stock, max_stock, bogo_offer
-     FROM item_overrides
-     WHERE product_code IN (${buildPlaceholders(productCodes)})`,
-    productCodes
-  );
+  const storeIdNum = Number(storeId);
+  const hasStore =
+    storeId !== undefined && storeId !== null && storeId !== '' && Number.isFinite(storeIdNum) && storeIdNum > 0;
+
+  const selectCols =
+    'product_code, store_id, sku, name, price, description, image_url, image_file_name, min_stock, max_stock, bogo_offer';
+
+  let rows = [];
+  if (hasStore) {
+    rows = await query(
+      `SELECT ${selectCols}
+       FROM item_overrides
+       WHERE product_code IN (${buildPlaceholders(productCodes)}) AND store_id = ?`,
+      [...productCodes, storeIdNum]
+    );
+    const have = new Set(rows.map((r) => String(r.product_code)));
+    const missing = productCodes.filter((c) => !have.has(String(c)));
+    if (missing.length > 0) {
+      const legacy = await query(
+        `SELECT ${selectCols}
+         FROM item_overrides
+         WHERE product_code IN (${buildPlaceholders(missing)}) AND store_id = 0`,
+        missing
+      );
+      rows = rows.concat(legacy);
+    }
+  } else {
+    rows = await query(
+      `SELECT ${selectCols}
+       FROM item_overrides
+       WHERE product_code IN (${buildPlaceholders(productCodes)}) AND store_id = 0`,
+      productCodes
+    );
+  }
 
   const overridesMap = new Map();
   for (const row of rows) {
+    const key = String(row.product_code);
+    if (overridesMap.has(key)) {
+      continue;
+    }
     const entry = {
       sku: row.sku ?? null,
       name: row.name ?? null,
@@ -204,7 +283,7 @@ const fetchOverridesForCodes = async (productCodes = []) => {
     if (row.bogo_offer != null && String(row.bogo_offer).trim() !== '') {
       entry.bogoOffer = String(row.bogo_offer).trim();
     }
-    overridesMap.set(String(row.product_code), entry);
+    overridesMap.set(key, entry);
   }
   return overridesMap;
 };
@@ -317,6 +396,10 @@ const mapItem = (row) => {
     minStock: Number(row.min_stock ?? row.reorder_level ?? 0),
     maxStock: Number(row.max_stock ?? 0),
     stock: Number(row.stock ?? row.quantity ?? 0),
+    storeId:
+      row.store_id != null && row.store_id !== ""
+        ? (Number.isFinite(Number(row.store_id)) ? Number(row.store_id) : null)
+        : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at
   };
@@ -444,7 +527,8 @@ const listItemsFromItemsTable = async ({
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active,
+            i.store_id, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      ${whereClause}
@@ -459,13 +543,19 @@ const listItemsFromItemsTable = async ({
     params
   );
 
-  const ids = rows.map((row) => String(row.id));
-  const overrides = await fetchOverridesForCodes(ids);
+  const codes = [
+    ...new Set(
+      rows
+        .map((row) => String(row.item_code ?? '').trim())
+        .filter((c) => c.length > 0)
+    )
+  ];
+  const overrides = await fetchOverridesForCodes(codes, storeId);
 
   return {
     items: rows.map((row) => {
       const baseItem = mapItem(row);
-      const override = overrides.get(String(baseItem.itemCode ?? baseItem.id));
+      const override = overrides.get(String(baseItem.itemCode ?? baseItem.id ?? ''));
       return applyOverrideToItem(baseItem, override);
     }),
     total: countRows[0]?.total || 0
@@ -578,7 +668,7 @@ const listItemsFromProductsTable = async ({
     .filter((code) => code !== null && code !== undefined)
     .map((code) => String(code));
 
-  const overrides = await fetchOverridesForCodes(productCodes);
+  const overrides = await fetchOverridesForCodes(productCodes, storeId);
 
   // Build a map of subcategory to category for items that have subcategory but no category
   const subcategoryToCategoryMap = new Map();
@@ -632,13 +722,14 @@ const listItemsFromProductsTable = async ({
   };
 };
 
-const getItemByIdFromItemsTable = async (itemId) => {
+const getItemByIdFromItemsTable = async (itemId, storeId = undefined) => {
   const rows = await query(
     `SELECT i.id, i.item_code, i.name, i.description, i.brand, i.category_id, i.subcategory_id,
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active,
+            i.store_id, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      WHERE i.id = ?
@@ -649,11 +740,20 @@ const getItemByIdFromItemsTable = async (itemId) => {
   if (rows.length === 0) return null;
   const baseItem = mapItem(rows[0]);
   const code = String(baseItem.itemCode ?? baseItem.id ?? itemId);
-  const overrides = await fetchOverridesForCodes([code]);
+  const fetchStore =
+    storeId !== undefined && storeId !== null && storeId !== ''
+      ? Number(storeId)
+      : baseItem.storeId != null
+        ? Number(baseItem.storeId)
+        : undefined;
+  const overrides = await fetchOverridesForCodes(
+    [code],
+    Number.isFinite(fetchStore) && fetchStore > 0 ? fetchStore : undefined
+  );
   return applyOverrideToItem(baseItem, overrides.get(code));
 };
 
-const getItemByIdFromProductsTable = async (itemId) => {
+const getItemByIdFromProductsTable = async (itemId, storeId = undefined) => {
   const rows = await query(
     `SELECT ProductCode AS ProductCode, ProductName, ProductFullName, ManufacturerCode, CategoryCode, SubCategory,
             UnitOfMeasure, UnitDescription, MRP, PurchasePrice, SalePrice,
@@ -665,7 +765,8 @@ const getItemByIdFromProductsTable = async (itemId) => {
                  FROM Tax t WHERE t.Taxcode = Products.TaxId LIMIT 1),
               0
             ) AS DerivedGstRate,
-            TotalStock
+            TotalStock,
+            store_id
      FROM Products
      WHERE ProductCode = ? OR UniversalProductCode = ?
      LIMIT 1`,
@@ -675,17 +776,28 @@ const getItemByIdFromProductsTable = async (itemId) => {
   if (rows.length === 0) return null;
   const baseItem = mapProduct(rows[0]);
   const code = String(baseItem.itemCode ?? baseItem.id ?? itemId);
-  const overrides = await fetchOverridesForCodes([code]);
+  const pStore = rows[0].store_id != null ? Number(rows[0].store_id) : undefined;
+  const fetchStore =
+    storeId !== undefined && storeId !== null && storeId !== ''
+      ? Number(storeId)
+      : Number.isFinite(pStore) && pStore > 0
+        ? pStore
+        : undefined;
+  const overrides = await fetchOverridesForCodes(
+    [code],
+    Number.isFinite(fetchStore) && fetchStore > 0 ? fetchStore : undefined
+  );
   return applyOverrideToItem(baseItem, overrides.get(code));
 };
 
-const findItemByBarcodeInItemsTable = async (barcodeOrCode) => {
+const findItemByBarcodeInItemsTable = async (barcodeOrCode, storeId = undefined) => {
   const rows = await query(
     `SELECT i.id, i.item_code, i.name, i.description, i.brand, i.category_id, i.subcategory_id,
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active,
+            i.store_id, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      WHERE i.barcode = ? OR i.item_code = ?
@@ -696,11 +808,20 @@ const findItemByBarcodeInItemsTable = async (barcodeOrCode) => {
   if (rows.length === 0) return null;
   const baseItem = mapItem(rows[0]);
   const code = String(baseItem.itemCode ?? baseItem.id ?? barcodeOrCode);
-  const overrides = await fetchOverridesForCodes([code]);
+  const fetchStore =
+    storeId !== undefined && storeId !== null && storeId !== ''
+      ? Number(storeId)
+      : baseItem.storeId != null
+        ? Number(baseItem.storeId)
+        : undefined;
+  const overrides = await fetchOverridesForCodes(
+    [code],
+    Number.isFinite(fetchStore) && fetchStore > 0 ? fetchStore : undefined
+  );
   return applyOverrideToItem(baseItem, overrides.get(code));
 };
 
-const findItemByBarcodeInProductsTable = async (barcodeOrCode) => {
+const findItemByBarcodeInProductsTable = async (barcodeOrCode, storeId = undefined) => {
   const rows = await query(
     `SELECT ProductCode AS ProductCode, ProductName, ProductFullName, ManufacturerCode, CategoryCode, SubCategory,
             UnitOfMeasure, UnitDescription, MRP, PurchasePrice, SalePrice,
@@ -712,7 +833,8 @@ const findItemByBarcodeInProductsTable = async (barcodeOrCode) => {
                  FROM Tax t WHERE t.Taxcode = Products.TaxId LIMIT 1),
               0
             ) AS DerivedGstRate,
-            TotalStock
+            TotalStock,
+            store_id
      FROM Products
      WHERE UniversalProductCode = ? OR BarCodeDescription = ? OR ProductCode = ?
      LIMIT 1`,
@@ -722,7 +844,17 @@ const findItemByBarcodeInProductsTable = async (barcodeOrCode) => {
   if (rows.length === 0) return null;
   const baseItem = mapProduct(rows[0]);
   const code = String(baseItem.itemCode ?? baseItem.id ?? barcodeOrCode);
-  const overrides = await fetchOverridesForCodes([code]);
+  const pStore = rows[0].store_id != null ? Number(rows[0].store_id) : undefined;
+  const fetchStore =
+    storeId !== undefined && storeId !== null && storeId !== ''
+      ? Number(storeId)
+      : Number.isFinite(pStore) && pStore > 0
+        ? pStore
+        : undefined;
+  const overrides = await fetchOverridesForCodes(
+    [code],
+    Number.isFinite(fetchStore) && fetchStore > 0 ? fetchStore : undefined
+  );
   return applyOverrideToItem(baseItem, overrides.get(code));
 };
 
@@ -733,11 +865,11 @@ export const listItems = async (options = {}) => {
   return listItemsFromProductsTable(options);
 };
 
-export const getItemById = async (itemId) => {
+export const getItemById = async (itemId, storeId = undefined) => {
   if (await checkItemsTableExists()) {
-    return getItemByIdFromItemsTable(itemId);
+    return getItemByIdFromItemsTable(itemId, storeId);
   }
-  return getItemByIdFromProductsTable(itemId);
+  return getItemByIdFromProductsTable(itemId, storeId);
 };
 
 const generateProductCode = async () => {
@@ -990,11 +1122,11 @@ export const createItem = async (itemData) => {
     }
 
     if (normalizedBogo) {
-      await upsertItemOverride(productCode, { bogoOffer: normalizedBogo });
+      await upsertItemOverride(productCode, { bogoOffer: normalizedBogo }, resolveOverrideStoreId(storeId));
     }
 
     // Get the created item and return it
-    return getItemByIdFromProductsTable(productCode);
+    return getItemByIdFromProductsTable(productCode, storeId);
   }
 
   // Original logic for items table
@@ -1039,7 +1171,7 @@ export const createItem = async (itemData) => {
         storeId || null
       ]
     );
-    return getItemById(result.insertId);
+    return getItemById(result.insertId, storeId);
   } else {
     // Fallback: insert without store_id if column doesn't exist
     const result = await query(
@@ -1070,7 +1202,7 @@ export const createItem = async (itemData) => {
         isActive ? 1 : 0
       ]
     );
-    return getItemById(result.insertId);
+    return getItemById(result.insertId, storeId);
   }
 };
 
@@ -1130,6 +1262,36 @@ export const updateItem = async (itemId, updates = {}) => {
     delete normalizedUpdates.bogoOffer;
   }
 
+  let effectiveOverrideStoreId = resolveOverrideStoreId(normalizedUpdates.storeId);
+  if (effectiveOverrideStoreId === 0) {
+    try {
+      if (itemsTableExists) {
+        const er = await query('SELECT store_id FROM items WHERE id = ? LIMIT 1', [normalizedId]);
+        const ex = er[0]?.store_id;
+        if (ex != null && ex !== '') {
+          effectiveOverrideStoreId = resolveOverrideStoreId(ex);
+        }
+      } else {
+        const colCheck = await query(`
+          SELECT COLUMN_NAME FROM information_schema.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Products' AND COLUMN_NAME = 'store_id'
+        `);
+        if (colCheck.length > 0) {
+          const pr = await query(
+            'SELECT store_id FROM Products WHERE ProductCode = ? OR UniversalProductCode = ? LIMIT 1',
+            [normalizedId, normalizedId]
+          );
+          const px = pr[0]?.store_id;
+          if (px != null && px !== '') {
+            effectiveOverrideStoreId = resolveOverrideStoreId(px);
+          }
+        }
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
   if (!itemsTableExists) {
     let legacyUpdatedItem = null;
 
@@ -1142,14 +1304,17 @@ export const updateItem = async (itemId, updates = {}) => {
     }
 
     if (Object.keys(overrideUpdates).length > 0) {
-      await upsertItemOverride(normalizedId, overrideUpdates);
+      await upsertItemOverride(normalizedId, overrideUpdates, effectiveOverrideStoreId);
     }
 
     if (legacyUpdatedItem) {
       return legacyUpdatedItem;
     }
 
-    return getItemById(normalizedId);
+    return getItemById(
+      normalizedId,
+      effectiveOverrideStoreId > 0 ? effectiveOverrideStoreId : undefined
+    );
   }
 
   const fields = [];
@@ -1264,10 +1429,13 @@ export const updateItem = async (itemId, updates = {}) => {
   }
 
   if (Object.keys(overrideUpdates).length > 0) {
-    await upsertItemOverride(normalizedId, overrideUpdates);
+    await upsertItemOverride(normalizedId, overrideUpdates, effectiveOverrideStoreId);
   }
 
-  return getItemById(normalizedId);
+  return getItemById(
+    normalizedId,
+    effectiveOverrideStoreId > 0 ? effectiveOverrideStoreId : undefined
+  );
 };
 
 const normalizeLegacyString = (value) => {
@@ -1441,7 +1609,7 @@ export async function syncLegacyProductRecord(productCode, updates = {}) {
     throw error;
   }
 
-  return getItemByIdFromProductsTable(normalizedCode);
+  return getItemByIdFromProductsTable(normalizedCode, updates.storeId);
 }
 
 export const deleteItem = async (itemId) => {
@@ -1584,7 +1752,7 @@ export const getStockWithBatches = async (filters = {}) => {
   }
 };
 
-export const findItemByBarcode = async (barcode) => {
+export const findItemByBarcode = async (barcode, storeId = undefined) => {
   if (!barcode) {
     return null;
   }
@@ -1595,23 +1763,21 @@ export const findItemByBarcode = async (barcode) => {
   }
 
   if (await checkItemsTableExists()) {
-    const item = await findItemByBarcodeInItemsTable(trimmed);
-    if (item) {
-      const code = String(item.itemCode ?? item.id ?? trimmed);
-      const overrides = await fetchOverridesForCodes([code]);
-      return applyOverrideToItem(item, overrides.get(code));
-    }
-  }
-
-  const overrideProductCode = await findOverrideProductCodeBySku(trimmed);
-  if (overrideProductCode) {
-    const item = await getItemById(overrideProductCode);
+    const item = await findItemByBarcodeInItemsTable(trimmed, storeId);
     if (item) {
       return item;
     }
   }
 
-  return findItemByBarcodeInProductsTable(trimmed);
+  const overrideProductCode = await findOverrideProductCodeBySku(trimmed);
+  if (overrideProductCode) {
+    const item = await getItemById(overrideProductCode, storeId);
+    if (item) {
+      return item;
+    }
+  }
+
+  return findItemByBarcodeInProductsTable(trimmed, storeId);
 };
 
 const removeItemOverride = async (productCode) => {

@@ -227,7 +227,9 @@ const normalizeItemPayload = (body = {}, req = null) => {
   // Get store_id from request user or body
   let storeId = parseNumber(body.store_id ?? body.storeId);
   if (!storeId && req) {
-    storeId = parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id);
+    storeId =
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id) ??
+      parseNumber(req.user?.selectedStoreId);
   }
   
   // Build payload, only including fields that are explicitly provided (not undefined)
@@ -433,7 +435,10 @@ export const getItemById = async (req, res) => {
       });
     }
 
-    const item = await getItemByIdRepo(itemId);
+    const storeId =
+      parseNumber(req.query.storeId ?? req.query.store_id) ??
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id);
+    const item = await getItemByIdRepo(itemId, storeId);
     if (!item) {
       return res.status(404).json({
         status: 'error',
@@ -464,7 +469,10 @@ export const getItemByBarcode = async (req, res) => {
       });
     }
 
-    const item = await findItemByBarcodeRepo(barcode);
+    const storeId =
+      parseNumber(req.query.storeId ?? req.query.store_id) ??
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id);
+    const item = await findItemByBarcodeRepo(barcode, storeId);
     if (!item) {
       return res.status(404).json({
         status: 'error',
@@ -592,9 +600,14 @@ export const updateItem = async (req, res) => {
     });
 
     const payload = normalizeItemPayload(req.body, req);
-    
-    // Get existing item to check current values
-    const existing = await getItemByIdRepo(itemId);
+
+    const hintStore =
+      parseNumber(req.body?.store_id ?? req.body?.storeId) ??
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id) ??
+      parseNumber(req.user?.selectedStoreId);
+
+    // Get existing item to check current values (merge store-scoped item_overrides)
+    const existing = await getItemByIdRepo(itemId, hintStore);
     if (!existing) {
       return res.status(404).json({
         status: 'error',
@@ -636,7 +649,12 @@ export const updateItem = async (req, res) => {
     
     // Log the update for debugging
     console.log('Updating item:', itemId, 'with payload:', payload);
-    
+
+    const resolvedStoreForWrite = parseNumber(payload.storeId) ?? hintStore;
+    if (Number.isFinite(resolvedStoreForWrite) && resolvedStoreForWrite > 0) {
+      payload.storeId = resolvedStoreForWrite;
+    }
+
     const updated = await updateItemRepo(itemId, payload);
 
     if (!updated) {
@@ -713,7 +731,11 @@ export const toggleItemStatus = async (req, res) => {
       });
     }
 
-    const existing = await getItemByIdRepo(itemId);
+    const hintStore =
+      parseNumber(req.body?.store_id ?? req.body?.storeId) ??
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id) ??
+      parseNumber(req.user?.selectedStoreId);
+    const existing = await getItemByIdRepo(itemId, hintStore);
     if (!existing) {
       return res.status(404).json({
         status: 'error',
@@ -721,7 +743,10 @@ export const toggleItemStatus = async (req, res) => {
       });
     }
 
-    const updated = await updateItemRepo(itemId, { isActive: !existing.isActive });
+    const updated = await updateItemRepo(itemId, {
+      isActive: !existing.isActive,
+      ...(Number(hintStore) > 0 ? { storeId: hintStore } : {})
+    });
 
     res.json({
       status: 'success',
@@ -761,9 +786,14 @@ export const uploadItemImage = async (req, res) => {
     }
 
     const imageUrl = `/uploads/items/${req.file.filename}`.replace(/\\/g, '/');
+    const hintStore =
+      parseNumber(req.body?.store_id ?? req.body?.storeId) ??
+      parseNumber(req.user?.selectedStore?.id ?? req.user?.selectedStore?._id) ??
+      parseNumber(req.user?.selectedStoreId);
     const payload = {
       imageUrl,
-      imageFileName: req.file.originalname || req.file.filename
+      imageFileName: req.file.originalname || req.file.filename,
+      ...(Number(hintStore) > 0 ? { storeId: hintStore } : {})
     };
 
     const updated = await updateItemRepo(itemId, payload);

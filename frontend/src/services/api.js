@@ -442,10 +442,14 @@ export const itemsAPI = {
     return await apiRequest(`/items/${itemId}`);
   },
 
-  // Get item by barcode
-  getItemByBarcode: async (barcode) => {
+  // Get item by barcode (optional storeId for store-scoped item_overrides)
+  getItemByBarcode: async (barcode, { storeId } = {}) => {
     const encoded = encodeURIComponent(barcode);
-    return await apiRequest(`/items/barcode/${encoded}`);
+    const qs =
+      storeId != null && storeId !== ''
+        ? `?storeId=${encodeURIComponent(String(storeId))}`
+        : '';
+    return await apiRequest(`/items/barcode/${encoded}${qs}`);
   },
 
   // Create item
