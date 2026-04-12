@@ -1596,7 +1596,8 @@ export default function Billing() {
       }
 
       // Fallback to API if not found in preloaded items
-      const response = await itemsAPI.getItemByBarcode(value);
+      const apiStoreId = selectedStore?._id || selectedStore?.id || selectedStore;
+      const response = await itemsAPI.getItemByBarcode(value, { storeId: apiStoreId });
       const itemData =
         response?.data?.item ??
         response?.item ??

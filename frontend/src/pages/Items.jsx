@@ -2174,6 +2174,12 @@ export default function Items() {
       payload.isActive = editForm.isActive;
     }
 
+    const editStoreId = selectedStore?._id || selectedStore?.id || selectedStore;
+    if (editStoreId !== undefined && editStoreId !== null && editStoreId !== "") {
+      payload.storeId = editStoreId;
+      payload.store_id = editStoreId;
+    }
+
     setSaving(true);
     try {
       const updateResponse = await itemsAPI.updateItem(identifier, payload);
@@ -2186,6 +2192,9 @@ export default function Items() {
       if (imageFile) {
         const formData = new FormData();
         formData.append('image', imageFile);
+        if (editStoreId !== undefined && editStoreId !== null && editStoreId !== "") {
+          formData.append("storeId", String(editStoreId));
+        }
         const uploadResponse = await itemsAPI.uploadItemImage(identifier, formData);
         updatedItem = uploadResponse?.data?.item ?? uploadResponse?.item ?? updatedItem;
       }
