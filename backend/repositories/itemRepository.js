@@ -25,6 +25,11 @@ const ensureItemsTableColumns = async () => {
         name: 'max_stock',
         definition: 'INT UNSIGNED NOT NULL DEFAULT 0',
         after: 'min_stock'
+      },
+      {
+        name: 'bogo_offer',
+        definition: 'VARCHAR(255) NULL',
+        after: 'notes'
       }
     ];
 
@@ -92,6 +97,17 @@ const ensureOverridesTable = async () => {
     await query(`ALTER TABLE item_overrides ADD COLUMN max_stock INT NULL`);
   }
 
+  const bogoCol = await query(`
+    SELECT COLUMN_NAME
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'item_overrides'
+      AND COLUMN_NAME = 'bogo_offer'
+  `);
+  if (!bogoCol.length) {
+    await query(`ALTER TABLE item_overrides ADD COLUMN bogo_offer VARCHAR(255) NULL`);
+  }
+
   overridesTableEnsured = true;
 };
 
@@ -142,6 +158,9 @@ const upsertItemOverride = async (productCode, updates = {}) => {
   if (Object.prototype.hasOwnProperty.call(updates, 'maxStock')) {
     addField('max_stock', updates.maxStock ?? null);
   }
+  if (Object.prototype.hasOwnProperty.call(updates, 'bogoOffer')) {
+    addField('bogo_offer', updates.bogoOffer ?? null);
+  }
 
   if (columns.length === 1) {
     return;
@@ -164,7 +183,7 @@ const fetchOverridesForCodes = async (productCodes = []) => {
   await ensureOverridesTable();
 
   const rows = await query(
-    `SELECT product_code, sku, name, price, description, image_url, image_file_name, min_stock, max_stock
+    `SELECT product_code, sku, name, price, description, image_url, image_file_name, min_stock, max_stock, bogo_offer
      FROM item_overrides
      WHERE product_code IN (${buildPlaceholders(productCodes)})`,
     productCodes
@@ -172,7 +191,7 @@ const fetchOverridesForCodes = async (productCodes = []) => {
 
   const overridesMap = new Map();
   for (const row of rows) {
-    overridesMap.set(String(row.product_code), {
+    const entry = {
       sku: row.sku ?? null,
       name: row.name ?? null,
       price: row.price !== null ? Number(row.price) : null,
@@ -181,7 +200,11 @@ const fetchOverridesForCodes = async (productCodes = []) => {
       imageFileName: row.image_file_name ?? null,
       minStock: row.min_stock !== null ? Number(row.min_stock) : null,
       maxStock: row.max_stock !== null ? Number(row.max_stock) : null
-    });
+    };
+    if (row.bogo_offer != null && String(row.bogo_offer).trim() !== '') {
+      entry.bogoOffer = String(row.bogo_offer).trim();
+    }
+    overridesMap.set(String(row.product_code), entry);
   }
   return overridesMap;
 };
@@ -215,6 +238,9 @@ const applyOverrideToItem = (item, override) => {
       : {}),
     ...(override.maxStock !== null && override.maxStock !== undefined
       ? { maxStock: Number(override.maxStock) }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(override, 'bogoOffer')
+      ? { bogoOffer: override.bogoOffer }
       : {})
   };
 };
@@ -284,6 +310,9 @@ const mapItem = (row) => {
     hsnCode: row.hsn_code,
     barcode: row.barcode,
     notes: row.notes,
+    bogoOffer: row.bogo_offer != null && String(row.bogo_offer).trim() !== ''
+      ? String(row.bogo_offer).trim()
+      : null,
     isActive: row.is_active === 1 || row.is_active === true,
     minStock: Number(row.min_stock ?? row.reorder_level ?? 0),
     maxStock: Number(row.max_stock ?? 0),
@@ -415,7 +444,7 @@ const listItemsFromItemsTable = async ({
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      ${whereClause}
@@ -609,7 +638,7 @@ const getItemByIdFromItemsTable = async (itemId) => {
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      WHERE i.id = ?
@@ -656,7 +685,7 @@ const findItemByBarcodeInItemsTable = async (barcodeOrCode) => {
             i.unit, i.cost_price, i.selling_price,
             COALESCE(NULLIF(i.mrp, 0), P.MRP, 0) AS mrp,
             i.reorder_level, i.min_stock, i.max_stock,
-            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.is_active, i.created_at, i.updated_at
+            i.gst_rate, i.hsn_code, i.barcode, i.notes, i.bogo_offer, i.is_active, i.created_at, i.updated_at
      FROM items i
      LEFT JOIN Products P ON P.ProductCode = i.item_code
      WHERE i.barcode = ? OR i.item_code = ?
@@ -776,9 +805,14 @@ export const createItem = async (itemData) => {
     hsnCode,
     barcode,
     notes,
+    bogoOffer,
     isActive = true,
     storeId
   } = itemData;
+  const normalizedBogo =
+    bogoOffer === null || bogoOffer === undefined || bogoOffer === ''
+      ? null
+      : String(bogoOffer).trim() || null;
   const normalizedMinStock = Number.isFinite(Number(minStock)) ? Number(minStock) : 0;
   const normalizedMaxStock = Number.isFinite(Number(maxStock)) ? Number(maxStock) : 0;
 
@@ -955,6 +989,10 @@ export const createItem = async (itemData) => {
       }
     }
 
+    if (normalizedBogo) {
+      await upsertItemOverride(productCode, { bogoOffer: normalizedBogo });
+    }
+
     // Get the created item and return it
     return getItemByIdFromProductsTable(productCode);
   }
@@ -976,7 +1014,39 @@ export const createItem = async (itemData) => {
       `INSERT INTO items (
         item_code, name, description, brand, category_id, subcategory_id,
         unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-        gst_rate, hsn_code, barcode, notes, is_active, store_id
+        gst_rate, hsn_code, barcode, notes, bogo_offer, is_active, store_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        itemCode,
+        name,
+        description || null,
+        brand || null,
+        categoryId || null,
+        subcategoryId || null,
+        unit || null,
+        costPrice || 0,
+        sellingPrice || 0,
+        mrp || 0,
+        reorderLevel || 0,
+        normalizedMinStock || 0,
+        normalizedMaxStock || 0,
+        gstRate || 0,
+        hsnCode || null,
+        barcode || null,
+        notes || null,
+        normalizedBogo,
+        isActive ? 1 : 0,
+        storeId || null
+      ]
+    );
+    return getItemById(result.insertId);
+  } else {
+    // Fallback: insert without store_id if column doesn't exist
+    const result = await query(
+      `INSERT INTO items (
+        item_code, name, description, brand, category_id, subcategory_id,
+        unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
+        gst_rate, hsn_code, barcode, notes, bogo_offer, is_active
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         itemCode,
@@ -996,37 +1066,7 @@ export const createItem = async (itemData) => {
         hsnCode || null,
         barcode || null,
         notes || null,
-        isActive ? 1 : 0,
-        storeId || null
-      ]
-    );
-    return getItemById(result.insertId);
-  } else {
-    // Fallback: insert without store_id if column doesn't exist
-    const result = await query(
-      `INSERT INTO items (
-        item_code, name, description, brand, category_id, subcategory_id,
-        unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-        gst_rate, hsn_code, barcode, notes, is_active
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        itemCode,
-        name,
-        description || null,
-        brand || null,
-        categoryId || null,
-        subcategoryId || null,
-        unit || null,
-        costPrice || 0,
-        sellingPrice || 0,
-        mrp || 0,
-        reorderLevel || 0,
-        normalizedMinStock || 0,
-        normalizedMaxStock || 0,
-        gstRate || 0,
-        hsnCode || null,
-        barcode || null,
-        notes || null,
+        normalizedBogo,
         isActive ? 1 : 0
       ]
     );
@@ -1080,6 +1120,15 @@ export const updateItem = async (itemId, updates = {}) => {
   }
 
   const itemsTableExists = await checkItemsTableExists();
+
+  if (Object.prototype.hasOwnProperty.call(normalizedUpdates, 'bogoOffer') && !itemsTableExists) {
+    const raw = normalizedUpdates.bogoOffer;
+    overrideUpdates.bogoOffer =
+      raw === null || raw === undefined || raw === ''
+        ? null
+        : String(raw).trim() || null;
+    delete normalizedUpdates.bogoOffer;
+  }
 
   if (!itemsTableExists) {
     let legacyUpdatedItem = null;
@@ -1179,6 +1228,15 @@ export const updateItem = async (itemId, updates = {}) => {
   if (normalizedUpdates.notes !== undefined) {
     fields.push('notes = ?');
     params.push(normalizedUpdates.notes || null);
+  }
+  if (normalizedUpdates.bogoOffer !== undefined) {
+    const raw = normalizedUpdates.bogoOffer;
+    const bogoValue =
+      raw === null || raw === undefined || raw === ''
+        ? null
+        : String(raw).trim() || null;
+    fields.push('bogo_offer = ?');
+    params.push(bogoValue);
   }
   if (normalizedUpdates.isActive !== undefined) {
     fields.push('is_active = ?');

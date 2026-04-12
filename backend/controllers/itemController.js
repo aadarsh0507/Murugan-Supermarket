@@ -347,6 +347,16 @@ const normalizeItemPayload = (body = {}, req = null) => {
     const trimmedNotes = body.notes?.trim();
     payload.notes = trimmedNotes || null;
   }
+
+  // Buy-one-get / BOGO offer label (shown on item cards)
+  if (body.bogoOffer !== undefined) {
+    if (body.bogoOffer === null || body.bogoOffer === '') {
+      payload.bogoOffer = null;
+    } else {
+      const trimmed = String(body.bogoOffer).trim();
+      payload.bogoOffer = trimmed || null;
+    }
+  }
   
   // Is Active
   if (body.isActive !== undefined) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
 import { Plus, Save, Trash2, X, Loader2, Receipt, ScanBarcode, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import {
   Card,
   CardContent,
@@ -64,6 +65,14 @@ const createId = () => {
   return Math.random().toString(36).slice(2, 10);
 };
 
+/** Items with a buy-one-get offer: default bill qty is 2; each repeat scan adds 2. */
+const itemHasBogoOffer = (item = {}) =>
+  Boolean(String(item?.bogoOffer ?? item?.bogo_offer ?? "").trim());
+
+const bogoDefaultQuantity = (item = {}) => (itemHasBogoOffer(item) ? 2 : 1);
+
+const bogoQuantityIncrement = (item = {}) => (itemHasBogoOffer(item) ? 2 : 1);
+
 const normalizeItem = (item = {}) => {
   const sourceId =
     item.id ??
@@ -96,6 +105,8 @@ const normalizeItem = (item = {}) => {
     0
   );
 
+  const bogoText = String(item.bogoOffer ?? item.bogo_offer ?? "").trim();
+
   return {
     sourceId,
     sku: item.sku ?? item.itemCode ?? "",
@@ -110,6 +121,7 @@ const normalizeItem = (item = {}) => {
     hsnCode: item.hsnCode ?? item.hsn_code ?? item.CommodityCode ?? "",
     gstRate: Number.isFinite(gstRate) ? gstRate : 0,
     batch: item.batch ?? item.batchNumber ?? "",
+    bogoOffer: bogoText || null,
   };
 };
 
@@ -176,10 +188,12 @@ const getTabColorClasses = (billNumber) => {
 };
 
 const getBillTotals = (bill) => {
-  const subtotal = bill.items.reduce(
-    (sum, line) => sum + line.price * line.quantity,
-    0
-  );
+  const subtotal = bill.items.reduce((sum, line) => {
+    const qty = Number.parseInt(line.quantity, 10);
+    const price = Number(line.price) || 0;
+    if (!Number.isFinite(qty) || qty <= 0) return sum;
+    return sum + price * qty;
+  }, 0);
   const discount = Number.parseFloat(bill.discount || 0) || 0;
   const tax = Number.parseFloat(bill.tax || 0) || 0;
   const total = Math.max(subtotal - discount + tax, 0);
@@ -268,6 +282,7 @@ const loadSavedState = () => {
             sgstAmount: line.sgstAmount !== undefined ? Number(line.sgstAmount) : undefined,
             cgstAmount: line.cgstAmount !== undefined ? Number(line.cgstAmount) : undefined,
             gstAmount: line.gstAmount !== undefined ? Number(line.gstAmount) : undefined,
+            bogoOffer: line.bogoOffer ?? line.bogo_offer ?? null,
           }))
         : []
     }));
@@ -320,6 +335,7 @@ export default function Billing() {
     cgstAmount: 0,
     gstAmount: 0,
     hsnCode: "",
+    bogoOffer: null,
   });
   const [itemSearchTerm, setItemSearchTerm] = useState("");
   const [showSearchDropdown, setShowSearchDropdown] = useState(false);
@@ -454,6 +470,11 @@ export default function Billing() {
           gstRate: item.gstRate ?? item.gst_rate ?? item.taxRate ?? item.tax_rate ?? 0,
           cessAmount: item.cessAmount ?? item.cess_amount ?? item.cess ?? 0,
           batch: item.batch ?? item.batchNumber ?? item.batch_number ?? '',
+          bogoOffer: (() => {
+            const raw = item.bogoOffer ?? item.bogo_offer;
+            const t = raw != null ? String(raw).trim() : "";
+            return t || null;
+          })(),
         };
       });
 
@@ -544,8 +565,8 @@ export default function Billing() {
   const selectItemFromSearch = (item) => {
     const normalized = normalizeItem(item);
     
-    // Calculate GST amounts based on price, quantity (default 1), and GST rate
-    const quantity = 1;
+    // BOGO items default to quantity 2 (user can change before adding)
+    const quantity = bogoDefaultQuantity(normalized);
     const baseAmount = (normalized.price || 0) * quantity;
     const gstRate = normalized.gstRate || 0;
     const gstAmount = (baseAmount * gstRate) / 100;
@@ -569,6 +590,7 @@ export default function Billing() {
       cgstAmount: cgstAmount,
       gstAmount: gstAmount,
       hsnCode: normalized.hsnCode || "",
+      bogoOffer: normalized.bogoOffer || null,
     };
     
     setNewItemRow(itemRow);
@@ -1014,11 +1036,13 @@ export default function Billing() {
       );
 
       if (existingIndex >= 0) {
-        const updatedItems = bill.items.map((line, index) =>
-          index === existingIndex
-            ? { ...line, quantity: line.quantity + 1 }
-            : line
-        );
+        const delta = bogoQuantityIncrement(item);
+        const updatedItems = bill.items.map((line, index) => {
+          if (index !== existingIndex) return line;
+          const prev = Number.parseInt(line.quantity, 10);
+          const safe = Number.isFinite(prev) && prev > 0 ? prev : 1;
+          return { ...line, quantity: safe + delta };
+        });
         return {
           items: updatedItems,
           isSaved: false,
@@ -1033,7 +1057,7 @@ export default function Billing() {
         sku: item.sku,
         price: item.price,
         mrp: item.mrp,
-        quantity: 1,
+        quantity: bogoDefaultQuantity(item),
         hsnCode: item.hsnCode ?? "",
         gstRate: item.gstRate ?? 0,
         batch: item.batch ?? "",
@@ -1041,6 +1065,7 @@ export default function Billing() {
         sgstAmount: undefined, // Will be calculated
         cgstAmount: undefined, // Will be calculated
         gstAmount: undefined, // Will be calculated
+        bogoOffer: item.bogoOffer ?? null,
       };
 
       return {
@@ -1106,7 +1131,7 @@ export default function Billing() {
       sku: newItemRow.sku || "",
       price: Number(newItemRow.price) || 0,
       mrp: Number(newItemRow.mrp) || 0,
-      quantity: Number(newItemRow.quantity) || 1,
+      quantity: Number(newItemRow.quantity) || bogoDefaultQuantity(newItemRow),
       hsnCode: newItemRow.hsnCode || "",
       gstRate: Number(newItemRow.gstRate) || 0,
       batch: newItemRow.batch || "",
@@ -1114,6 +1139,7 @@ export default function Billing() {
       sgstAmount: Number(newItemRow.sgstAmount) || 0,
       cgstAmount: Number(newItemRow.cgstAmount) || 0,
       gstAmount: Number(newItemRow.gstAmount) || 0,
+      bogoOffer: newItemRow.bogoOffer || null,
     };
 
     updateBill(billId, (bill) => ({
@@ -1136,6 +1162,7 @@ export default function Billing() {
       cgstAmount: 0,
       gstAmount: 0,
       hsnCode: "",
+      bogoOffer: null,
     });
 
     toast({
@@ -1831,7 +1858,9 @@ export default function Billing() {
                     </thead>
                     <tbody>
                       {activeBill?.items.map((line, index) => {
-                        const baseAmount = line.price * line.quantity;
+                        const qtyNum = Number.parseInt(line.quantity, 10);
+                        const safeQty = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 0;
+                        const baseAmount = Number(line.price || 0) * safeQty;
                         const gstRate = line.gstRate ?? 0;
                         // Use manual values if set, otherwise calculate
                         const gstAmount = line.gstAmount !== undefined ? line.gstAmount : (baseAmount * gstRate) / 100;
@@ -1860,9 +1889,19 @@ export default function Billing() {
                             
                             {/* Product Name */}
                             <td className="p-2 text-left">
-                              <span className="text-sm font-medium">
-                                {line.name || "—"}
-                              </span>
+                              <div className="flex flex-col gap-1 items-start">
+                                <span className="text-sm font-medium">
+                                  {line.name || "—"}
+                                </span>
+                                {line.bogoOffer ? (
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-[10px] font-medium px-1.5 py-0 bg-amber-100 text-amber-950 border-amber-200/80 hover:bg-amber-100"
+                                  >
+                                    {line.bogoOffer}
+                                  </Badge>
+                                ) : null}
+                              </div>
                             </td>
                             
                             {/* Quantity */}
@@ -2087,13 +2126,21 @@ export default function Billing() {
                                         <div className="flex justify-between items-center">
                                           <div className="flex-1 min-w-0">
                                             <p className="font-medium text-sm truncate">{item.name}</p>
-                                            <div className="flex items-center gap-2 mt-1">
+                                            <div className="flex flex-wrap items-center gap-2 mt-1">
                                               {item.sku && (
                                                 <p className="text-xs text-muted-foreground">SKU: {item.sku}</p>
                                               )}
                                               {item.hsnCode && (
                                                 <p className="text-xs text-muted-foreground">HSN: {item.hsnCode}</p>
                                               )}
+                                              {item.bogoOffer ? (
+                                                <Badge
+                                                  variant="secondary"
+                                                  className="text-[10px] px-1.5 py-0 bg-amber-100 text-amber-950 border-amber-200/80"
+                                                >
+                                                  {item.bogoOffer} · qty 2
+                                                </Badge>
+                                              ) : null}
                                             </div>
                                           </div>
                                           <span className="font-semibold text-primary ml-2 text-sm">{toCurrency(item.price)}</span>
@@ -2233,13 +2280,21 @@ export default function Billing() {
                                           <div className="flex justify-between items-start gap-2">
                                             <div className="flex-1 min-w-0">
                                               <p className="font-semibold text-sm text-foreground">{item.name}</p>
-                                              <div className="flex items-center gap-3 mt-1.5">
+                                              <div className="flex flex-wrap items-center gap-2 mt-1.5">
                                                 {item.sku && (
                                                   <p className="text-xs text-muted-foreground font-medium">Code: {item.sku}</p>
                                                 )}
                                                 {item.hsnCode && (
                                                   <p className="text-xs text-muted-foreground">HSN: {item.hsnCode}</p>
                                                 )}
+                                                {item.bogoOffer ? (
+                                                  <Badge
+                                                    variant="secondary"
+                                                    className="text-[10px] px-1.5 py-0 bg-amber-100 text-amber-950 border-amber-200/80"
+                                                  >
+                                                    {item.bogoOffer} · qty 2
+                                                  </Badge>
+                                                ) : null}
                                               </div>
                                             </div>
                                             <span className="font-bold text-primary text-base whitespace-nowrap ml-2">{toCurrency(item.price)}</span>
@@ -2303,6 +2358,11 @@ export default function Billing() {
                               }
                             }}
                           />
+                          {newItemRow.bogoOffer ? (
+                            <p className="text-[10px] text-muted-foreground mt-1 max-w-[8rem] mx-auto leading-tight">
+                              Offer: default qty 2 — edit if needed
+                            </p>
+                          ) : null}
                         </td>
                         
                         {/* Batch */}
