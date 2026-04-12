@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { Search, Package, Pencil, Loader2, ChevronDown, Check, ChevronLeft, ChevronRight, Barcode, Printer, Plus, X, ChevronRight as ChevronRightIcon, Tag } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,8 @@ const EMPTY_STATE = {
 
 const DEFAULT_PAGE_SIZE = 100;
 const CRITICAL_STOCK_THRESHOLD = 5;
+/** Shown on product cards when the BOGO checkbox is enabled */
+const BOGO_OFFER_CARD_LABEL = "Buy 1 Get 1 Free";
 
 /** Move focus to the next editable control in an item edit/create form (Enter key). */
 function focusNextFieldInForm(form, activeElement) {
@@ -101,6 +104,7 @@ export default function Items() {
     minStock: "",
     maxStock: "",
     notes: "",
+    bogoOfferEnabled: false,
     isActive: true
   });
   const hadExplicitPageParamRef = useRef(false);
@@ -144,6 +148,7 @@ export default function Items() {
     minStock: "",
     maxStock: "",
     notes: "",
+    bogoOfferEnabled: false,
     isActive: true
   });
   const [creatingItem, setCreatingItem] = useState(false);
@@ -742,6 +747,7 @@ export default function Items() {
       minStock: "",
       maxStock: "",
       notes: "",
+      bogoOfferEnabled: false,
       isActive: true
     });
     setItemBatches([]);
@@ -817,6 +823,9 @@ export default function Items() {
           ? String(item.maxStock)
           : "",
       notes: item.notes || "",
+      bogoOfferEnabled: Boolean(
+        String(item.bogoOffer ?? item.bogo_offer ?? "").trim()
+      ),
       isActive: item.isActive !== undefined ? item.isActive : true
     });
     if (imagePreview && imagePreview.startsWith("blob:")) {
@@ -2158,6 +2167,8 @@ export default function Items() {
       payload.notes = trimmedNotes || null;
     }
 
+    payload.bogoOffer = editForm.bogoOfferEnabled ? BOGO_OFFER_CARD_LABEL : null;
+
     // Is Active
     if (editForm.isActive !== undefined) {
       payload.isActive = editForm.isActive;
@@ -2227,6 +2238,7 @@ export default function Items() {
       : 0;
     const stockStatus = evaluateStockStatus(item);
     const stockQuantity = normalizeStockNumber(item.stock ?? item.quantity ?? 0);
+    const bogoLabel = (item.bogoOffer ?? item.bogo_offer ?? "").trim();
     // Ensure minStock and maxStock are properly parsed as numbers
     const minStockValue = normalizeStockNumber(
       typeof item.minStock === 'string' 
@@ -2273,6 +2285,15 @@ export default function Items() {
                   {item.name}
                 </CardTitle>
                 <p className="text-xs text-muted-foreground">SKU: {skuValue}</p>
+                {bogoLabel ? (
+                  <Badge
+                    variant="secondary"
+                    className="mt-1 inline-flex w-fit max-w-full items-center gap-1 whitespace-normal text-left font-medium bg-amber-100 text-amber-950 hover:bg-amber-100 border-amber-200/80"
+                  >
+                    <Tag className="h-3 w-3 shrink-0" />
+                    {bogoLabel}
+                  </Badge>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
                 <Badge className={cn("text-xs font-medium", stockStatus.badgeClass)}>
@@ -2688,6 +2709,7 @@ export default function Items() {
         minStock: Number.isFinite(minStockValue) ? minStockValue : 0,
         maxStock: Number.isFinite(maxStockValue) ? maxStockValue : 0,
         notes: createItemForm.notes.trim() || null,
+        bogoOffer: createItemForm.bogoOfferEnabled ? BOGO_OFFER_CARD_LABEL : null,
         isActive: createItemForm.isActive
       };
 
@@ -2723,6 +2745,7 @@ export default function Items() {
         minStock: "",
         maxStock: "",
         notes: "",
+        bogoOfferEnabled: false,
         isActive: true
       });
       setShowCategoryCreation(false);
@@ -3104,6 +3127,34 @@ export default function Items() {
                     onChange={handleFormChange('mrp')}
                     placeholder="0.00"
                   />
+                </div>
+              </div>
+            </div>
+
+            {/* Promotions */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Offers</h3>
+              <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 p-4">
+                <Checkbox
+                  id="edit-item-bogo"
+                  checked={editForm.bogoOfferEnabled}
+                  onCheckedChange={(checked) =>
+                    setEditForm((prev) => ({
+                      ...prev,
+                      bogoOfferEnabled: checked === true
+                    }))
+                  }
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label
+                    htmlFor="edit-item-bogo"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Buy one get one offer
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    When ticked, “{BOGO_OFFER_CARD_LABEL}” appears on the product card.
+                  </p>
                 </div>
               </div>
             </div>
@@ -4267,6 +4318,29 @@ export default function Items() {
                     onChange={(e) => setCreateItemForm(prev => ({ ...prev, maxStock: e.target.value }))}
                     placeholder="0"
                   />
+                </div>
+              </div>
+              <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 p-4">
+                <Checkbox
+                  id="create-item-bogo"
+                  checked={createItemForm.bogoOfferEnabled}
+                  onCheckedChange={(checked) =>
+                    setCreateItemForm((prev) => ({
+                      ...prev,
+                      bogoOfferEnabled: checked === true
+                    }))
+                  }
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label
+                    htmlFor="create-item-bogo"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Buy one get one offer
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    When ticked, “{BOGO_OFFER_CARD_LABEL}” shows on the product card.
+                  </p>
                 </div>
               </div>
               <div className="space-y-2">
