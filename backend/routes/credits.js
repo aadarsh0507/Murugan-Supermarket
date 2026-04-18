@@ -1,5 +1,5 @@
 import express from 'express';
-import { protect, requireScreen } from '../middleware/auth.js';
+import { protect, requireScreen, requireAnyScreen } from '../middleware/auth.js';
 import {
   getAllCredits,
   getCreditById,
@@ -13,16 +13,15 @@ import {
 const router = express.Router();
 
 router.use(protect);
-router.use(requireScreen('credits'));
 
-router.get('/', getAllCredits);
-router.get('/summary/:supplierId', getCreditsSummaryBySupplier);
-router.get('/:id', getCreditById);
+router.get('/', requireAnyScreen(['credits', 'reports']), getAllCredits);
+router.get('/summary/:supplierId', requireAnyScreen(['credits', 'reports']), getCreditsSummaryBySupplier);
+router.get('/:id', requireAnyScreen(['credits', 'reports']), getCreditById);
 
-router.post('/', createCredit);
-router.put('/:id/amount', updateCreditAmount);
-router.put('/:id/payment', updateCreditPayment);
-router.delete('/:id', deleteCredit);
+router.post('/', requireScreen('credits'), createCredit);
+router.put('/:id/amount', requireScreen('credits'), updateCreditAmount);
+router.put('/:id/payment', requireScreen('credits'), updateCreditPayment);
+router.delete('/:id', requireScreen('credits'), deleteCredit);
 
 export default router;
 

@@ -31,6 +31,79 @@ import { getErrorMessage, getErrorTitle } from "@/utils/errorMessages";
 
 const COLORS = ['hsl(239 70% 55%)', 'hsl(142 76% 45%)', 'hsl(38 92% 50%)', 'hsl(0 84% 60%)', 'hsl(263 70% 50%)'];
 
+const DATE_INPUT_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** HTML date input value → start of that local calendar day as ISO (for API range filters). */
+function localDateInputToIsoStart(dateYmd) {
+  const s = String(dateYmd).trim();
+  if (!DATE_INPUT_RE.test(s)) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString();
+}
+
+/** HTML date input value → end of that local calendar day as ISO (inclusive). */
+function localDateInputToIsoEnd(dateYmd) {
+  const s = String(dateYmd).trim();
+  if (!DATE_INPUT_RE.test(s)) return null;
+  const [y, m, d] = s.split('-').map(Number);
+  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
+}
+
+function buildReportApiDateParams(dateFrom, dateTo) {
+  const out = {};
+  // Send plain YYYY-MM-DD so the backend can filter with DATE(...) and avoid TZ drift vs ISO instants.
+  if (dateFrom) {
+    const s = String(dateFrom).trim();
+    out.startDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoStart(dateFrom) ?? dateFrom;
+  }
+  if (dateTo) {
+    const s = String(dateTo).trim();
+    out.endDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoEnd(dateTo) ?? dateTo;
+  }
+  return out;
+}
+
+/** Align Reports PO rows with Credits: credit POs that only exist on purchase_orders (no po_credits row yet). */
+function mapPurchaseOrderToReportCredit(po) {
+  const poId = po._id ?? po.id;
+  const totalAmount = Number.parseFloat(po.totalAmount ?? po.total ?? 0) || 0;
+  const partial = Number.parseFloat(po.partialPayment ?? po.partial_payment ?? 0) || 0;
+  const poNumber = String(po.poNumber ?? po.po_number ?? "").trim();
+  const supplierId = po.supplierId ?? po.supplier_id;
+  const supplierName = po.supplierName ?? po.supplier_name ?? "N/A";
+  const orderDate = po.orderDate ?? po.order_date;
+  const bal = Math.max(totalAmount - partial, 0);
+  const status =
+    partial <= 0 ? "pending" : partial >= totalAmount ? "paid" : "partially_paid";
+  return {
+    _id: `po-${poId}`,
+    purchaseOrderId: poId,
+    poNumber,
+    purchaseOrder: { poNumber, total: totalAmount, _id: poId },
+    supplier: supplierId ? { _id: supplierId, companyName: supplierName } : null,
+    supplierId,
+    supplierName,
+    orderDate,
+    originalAmount: totalAmount,
+    initialOriginalAmount: totalAmount,
+    paidAmount: partial,
+    balanceAmount: bal,
+    status,
+    notes: po.notes || "",
+    paymentHistory: [],
+    amountChangeHistory: [],
+  };
+}
+
+function parseCreditsListResponse(response) {
+  if (!response) return [];
+  const d = response.data ?? response;
+  if (Array.isArray(d?.credits)) return d.credits;
+  if (Array.isArray(d?.data?.credits)) return d.data.credits;
+  if (Array.isArray(response.credits)) return response.credits;
+  return [];
+}
+
 const formatUserDisplayName = (userItem) => {
   if (!userItem) return "Unnamed User";
   const first = userItem.firstName ? String(userItem.firstName).trim() : "";
@@ -92,7 +165,7 @@ export default function Reports() {
   const [selectedCreditSupplierId, setSelectedCreditSupplierId] = useState("all");
   const [creditStatusFilter, setCreditStatusFilter] = useState("all");
   const [creditViewMode, setCreditViewMode] = useState("summary"); // "summary" or "detailed"
-  const [creditTypeFilter, setCreditTypeFilter] = useState("po"); // "po" or "billing"
+  const [creditTypeFilter, setCreditTypeFilter] = useState("po"); // "po" | "billing"
 
   // Mobile Orders (Orders) Report States
   const [mobileOrders, setMobileOrders] = useState([]);
@@ -104,7 +177,10 @@ export default function Reports() {
   const [returnsReportLoading, setReturnsReportLoading] = useState(false);
   const [returnsStatusFilter, setReturnsStatusFilter] = useState("all");
 
-  const canFilterByUser = hasScreenAccess('user-rights') || hasScreenAccess('users');
+  const canFilterByUser =
+    Boolean(user?.isAdmin ?? user?.is_admin) ||
+    hasScreenAccess('user-rights') ||
+    hasScreenAccess('users');
   const restrictToOwnData = !canFilterByUser;
 
   useEffect(() => {
@@ -133,7 +209,10 @@ export default function Reports() {
       if (saved.selectedCreditSupplierId) setSelectedCreditSupplierId(saved.selectedCreditSupplierId);
       if (saved.creditStatusFilter) setCreditStatusFilter(saved.creditStatusFilter);
       if (saved.creditViewMode) setCreditViewMode(saved.creditViewMode);
-      if (saved.creditTypeFilter) setCreditTypeFilter(saved.creditTypeFilter);
+      if (saved.creditTypeFilter) {
+        const cf = saved.creditTypeFilter === "both" ? "po" : saved.creditTypeFilter;
+        setCreditTypeFilter(cf === "billing" || cf === "po" ? cf : "po");
+      }
       if (saved.ordersStatusFilter) setOrdersStatusFilter(saved.ordersStatusFilter);
       if (saved.returnsStatusFilter) setReturnsStatusFilter(saved.returnsStatusFilter);
     } catch { }
@@ -181,8 +260,14 @@ export default function Reports() {
     localStorage.setItem('reports_filters', JSON.stringify(toSave));
   }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
 
-  // Get store ID for dependency tracking - this ensures the effect runs when store changes
-  const storeIdForEffect = selectedStore?._id || selectedStore?.id || null;
+  // Store for reports: header picker first, then profile/JWT store (sidebar can show "Select Store" while user still has a default store)
+  const storeIdForEffect =
+    selectedStore?._id ||
+    selectedStore?.id ||
+    user?.selectedStore?._id ||
+    user?.selectedStore?.id ||
+    user?.selectedStoreId ||
+    null;
 
   useEffect(() => {
     if (activeTab === "sales") {
@@ -201,7 +286,7 @@ export default function Reports() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportType, dateFrom, dateTo, selectedUserId, storeIdForEffect, activeTab]);
+  }, [reportType, dateFrom, dateTo, selectedUserId, storeIdForEffect, activeTab, user]);
 
   useEffect(() => {
     if (activeTab === "purchase") {
@@ -220,7 +305,7 @@ export default function Reports() {
     if (activeTab === "returns") {
       loadReturnsReportData();
     }
-  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter]);
+  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter, storeIdForEffect, user]);
 
   const loadUsers = async () => {
     try {
@@ -266,39 +351,100 @@ export default function Reports() {
   const loadCreditReportData = async () => {
     setCreditLoading(true);
     try {
+      const storeId =
+        selectedStore?._id ||
+        selectedStore?.id ||
+        user?.selectedStore?._id ||
+        user?.selectedStore?.id ||
+        user?.selectedStoreId ||
+        null;
       const params = {
         limit: 1000, // Get all credits for the report
-        page: 1
+        page: 1,
+        ...buildReportApiDateParams(dateFrom, dateTo),
       };
-      if (dateFrom) params.startDate = dateFrom;
-      if (dateTo) params.endDate = dateTo;
+      if (storeId != null && storeId !== "") {
+        const sid = Number(storeId);
+        params.storeId = Number.isFinite(sid) && sid > 0 ? sid : storeId;
+      }
       if (creditStatusFilter && creditStatusFilter !== "all") {
         params.status = creditStatusFilter;
       }
 
       if (creditTypeFilter === "po") {
-        // Load PO Credits
         if (selectedCreditSupplierId && selectedCreditSupplierId !== "all") {
           params.supplierId = selectedCreditSupplierId;
         }
         const response = await creditsAPI.getCredits(params);
-        const creditsData = response.data?.credits || [];
+        let creditsData = parseCreditsListResponse(response);
+
+        // Match Credits page: include POs flagged as credit that do not yet have a po_credits row.
+        if (storeId != null && storeId !== "") {
+          const poFetchParams = {
+            limit: 10000,
+            page: 1,
+            isCredit: true,
+            ...buildReportApiDateParams(dateFrom, dateTo),
+          };
+          const sid = Number(storeId);
+          poFetchParams.storeId = Number.isFinite(sid) && sid > 0 ? sid : storeId;
+          if (selectedCreditSupplierId && selectedCreditSupplierId !== "all") {
+            poFetchParams.supplierId = selectedCreditSupplierId;
+          }
+          try {
+            const poResponse = await purchaseOrdersAPI.getPurchaseOrders(poFetchParams);
+            const allPOs =
+              poResponse?.data?.purchaseOrders ||
+              poResponse?.data ||
+              poResponse?.purchaseOrders ||
+              [];
+            const creditPOIds = new Set(
+              creditsData
+                .map((c) => c.purchaseOrderId || c.purchaseOrder?._id)
+                .filter((id) => id !== undefined && id !== null && id !== "")
+                .map((id) => String(id))
+            );
+            const synthetic = (Array.isArray(allPOs) ? allPOs : [])
+              .filter((po) => {
+                const pid = String(po._id ?? po.id ?? "");
+                return pid && !creditPOIds.has(pid);
+              })
+              .map(mapPurchaseOrderToReportCredit);
+            creditsData = [...creditsData, ...synthetic];
+          } catch (poErr) {
+            console.error("Error loading credit purchase orders for report:", poErr);
+          }
+        }
+
+        creditsData.sort((a, b) => {
+          const da = new Date(a.orderDate || 0).getTime();
+          const db = new Date(b.orderDate || 0).getTime();
+          return db - da;
+        });
+
         setCredits(creditsData);
         setCustomerCredits([]);
+        setCreditReportData(processCreditReportData(creditsData, "po"));
+      } else if (creditTypeFilter === "billing") {
+        if (storeId == null || storeId === "") {
+          setCustomerCredits([]);
+          setCredits([]);
+          setCreditReportData(processCreditReportData([], "billing"));
+          return;
+        }
 
-        // Process credit report data
-        const processedData = processCreditReportData(creditsData, "po");
-        setCreditReportData(processedData);
-      } else {
-        // Load Billing Credits
         const response = await customerCreditsAPI.getCustomerCredits(params);
-        const creditsData = response.data?.credits || [];
+        const raw = response?.data ?? response;
+        const creditsData = Array.isArray(raw?.credits)
+          ? raw.credits
+          : Array.isArray(raw?.data?.credits)
+            ? raw.data.credits
+            : Array.isArray(response?.credits)
+              ? response.credits
+              : [];
         setCustomerCredits(creditsData);
         setCredits([]);
-
-        // Process credit report data
-        const processedData = processCreditReportData(creditsData, "billing");
-        setCreditReportData(processedData);
+        setCreditReportData(processCreditReportData(creditsData, "billing"));
       }
     } catch (error) {
       console.error("Error loading credit report data:", error);
@@ -420,7 +566,7 @@ export default function Reports() {
 
     // Sort table data by date
     const sortDateField = type === "po" ? "orderDate" : "billDate";
-    const sortedTableData = creditsData.sort((a, b) => {
+    const sortedTableData = [...creditsData].sort((a, b) => {
       const dateA = a[sortDateField] ? new Date(a[sortDateField]) : new Date(0);
       const dateB = b[sortDateField] ? new Date(b[sortDateField]) : new Date(0);
       return dateB - dateA;
@@ -446,10 +592,9 @@ export default function Reports() {
     setLoading(true);
     try {
       const params = {
-        limit: 1000
+        limit: 1000,
+        ...buildReportApiDateParams(dateFrom, dateTo),
       };
-      if (dateFrom) params.startDate = dateFrom;
-      if (dateTo) params.endDate = dateTo;
       if (selectedSupplierId && selectedSupplierId !== "all") {
         params.supplierId = selectedSupplierId;
       }
@@ -657,8 +802,14 @@ export default function Reports() {
   };
 
   const loadReportData = async () => {
-    const storeId = selectedStore?._id || selectedStore?.id;
-    if (!storeId) {
+    const storeId =
+      selectedStore?._id ||
+      selectedStore?.id ||
+      user?.selectedStore?._id ||
+      user?.selectedStore?.id ||
+      user?.selectedStoreId ||
+      null;
+    if (storeId == null || storeId === "") {
       // Don't load if no store is selected
       setReportData(null);
       setDetailedBills([]);
@@ -674,16 +825,16 @@ export default function Reports() {
     setLoading(true);
     try {
       const params = {
-        limit: 10000  // Get all bills for detailed report (we'll paginate on frontend)
+        limit: 10000, // Get all bills for detailed report (we'll paginate on frontend)
+        ...buildReportApiDateParams(dateFrom, dateTo),
       };
-      if (dateFrom) params.startDate = dateFrom;
-      if (dateTo) params.endDate = dateTo;
-      
-      // Always filter by selected store
-      params.storeId = storeId;
+
+      const sid = Number(storeId);
+      params.storeId = Number.isFinite(sid) && sid > 0 ? sid : storeId;
 
       if (restrictToOwnData) {
-        params.createdBy = user.id;
+        const uid = user?.id ?? user?._id;
+        if (uid != null) params.createdBy = uid;
       } else if (selectedUserId && selectedUserId !== "all") {
         params.createdBy = selectedUserId;
       }
@@ -1094,20 +1245,27 @@ export default function Reports() {
 
   const summarizePaymentHistory = (credit) => {
     const payments = Array.isArray(credit?.paymentHistory) ? [...credit.paymentHistory] : [];
-    if (payments.length === 0) return "No payments";
+    if (payments.length === 0) {
+      const paid = Number(credit?.paidAmount ?? 0);
+      if (paid > 0) {
+        return `Total ${formatCurrencyValue(paid)} (no per-payment log)`;
+      }
+      return "No payments";
+    }
     payments.sort((a, b) => {
-      const dateA = new Date(a.paymentDate || 0);
-      const dateB = new Date(b.paymentDate || 0);
+      const dateA = new Date(a.paymentDate || a.createdAt || 0);
+      const dateB = new Date(b.paymentDate || b.createdAt || 0);
       return dateB - dateA;
     });
     return payments
       .map((payment) => {
         const date = formatDateValue(payment.paymentDate || payment.createdAt || new Date(), true);
+        const mode = String(payment.paymentMode || payment.payment_mode || "cash").toUpperCase();
         const by = payment.collectedBy
           ? ` by ${[payment.collectedBy.firstName, payment.collectedBy.lastName].filter(Boolean).join(" ")}`
           : "";
         const notes = payment.notes ? ` (${payment.notes})` : "";
-        return `${date}: ${formatCurrencyValue(payment.amount)}${by}${notes}`;
+        return `${date}: ${formatCurrencyValue(payment.amount)} ${mode}${by}${notes}`;
       })
       .join(" | ");
   };
@@ -1246,6 +1404,7 @@ export default function Reports() {
           "Current Amount (₹)",
           "Discount (₹)",
           "Paid Amount (₹)",
+          "Payment History",
           "Balance (₹)",
           "Status",
           "Amount Edit History",
@@ -1263,14 +1422,14 @@ export default function Reports() {
           const baseData = isPOCredit
             ? {
               "PO Number": credit.poNumber || "",
-              "Supplier": credit.supplier?.companyName || credit.supplierName || "Unknown",
-              "Order Date": formatDateValue(credit.orderDate)
+              Supplier: credit.supplier?.companyName || credit.supplierName || "Unknown",
+              "Order Date": formatDateValue(credit.orderDate),
             }
             : {
               "Bill Number": credit.billNumber || "N/A",
-              "Customer": credit.customerName || "Unknown",
+              Customer: credit.customerName || "Unknown",
               "Customer Phone": credit.customerPhone || "N/A",
-              "Bill Date": formatDateValue(credit.billDate)
+              "Bill Date": formatDateValue(credit.billDate),
             };
 
           // Get payment modes from payment history only (actual payments made)
@@ -1302,6 +1461,7 @@ export default function Reports() {
             "Current Amount (₹)": Math.round(currentAmount),
             "Discount (₹)": Math.round(discount),
             "Paid Amount (₹)": Math.round(credit.paidAmount || 0),
+            "Payment History": summarizePaymentHistory(credit),
             "Balance (₹)": Math.round(credit.balanceAmount || 0),
             "Status": (credit.status || "").replace(/_/g, " "),
             "Amount Edit History": summarizeAmountHistory(credit),
@@ -1757,8 +1917,8 @@ export default function Reports() {
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="po">PO Credit</SelectItem>
-                          <SelectItem value="billing">Billing Credit</SelectItem>
+                          <SelectItem value="po">PO credit</SelectItem>
+                          <SelectItem value="billing">Billing credit</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
@@ -2997,7 +3157,11 @@ export default function Reports() {
                 >
                   <Card>
                     <CardHeader>
-                      <CardTitle>{creditTypeFilter === "po" ? "Supplier-wise Credit Summary" : "Customer-wise Credit Summary"}</CardTitle>
+                      <CardTitle>
+                        {creditTypeFilter === "po"
+                          ? "Supplier-wise credit summary"
+                          : "Customer-wise credit summary"}
+                      </CardTitle>
                     </CardHeader>
                     <CardContent>
                       <div className="overflow-x-auto">
@@ -3069,6 +3233,7 @@ export default function Reports() {
                           <TableHead className="text-right">Current Amount (₹)</TableHead>
                           <TableHead className="text-right">Discount (₹)</TableHead>
                           <TableHead className="text-right">Paid Amount (₹)</TableHead>
+                          <TableHead className="min-w-[260px]">Payment history</TableHead>
                           <TableHead className="text-right">Balance (₹)</TableHead>
                           <TableHead>Status</TableHead>
                           <TableHead className="min-w-[250px]">Amount Edit History</TableHead>
@@ -3078,6 +3243,8 @@ export default function Reports() {
                       </TableHeader>
                       <TableBody>
                         {creditReportData.tableData.map((credit, index) => {
+                          const rowKind = creditTypeFilter;
+
                           // Get initial amount - check multiple possible fields
                           // Priority: initialOriginalAmount > purchaseOrder.total > originalAmount
                           let initialAmount = credit.originalAmount || 0;
@@ -3155,10 +3322,19 @@ export default function Reports() {
                                 .filter(note => note && note.trim() !== '')
                             : [];
 
+                          const sortedPayments =
+                            credit.paymentHistory && credit.paymentHistory.length > 0
+                              ? [...credit.paymentHistory].sort((a, b) => {
+                                  const dateA = new Date(a.paymentDate || a.createdAt || 0);
+                                  const dateB = new Date(b.paymentDate || b.createdAt || 0);
+                                  return dateB - dateA;
+                                })
+                              : [];
+
                           return (
                             <TableRow key={credit._id || index}>
                               <TableCell className="text-center">{index + 1}</TableCell>
-                              {creditTypeFilter === "po" ? (
+                              {rowKind === "po" ? (
                                 <>
                                   <TableCell className="font-medium">{credit.poNumber}</TableCell>
                                   <TableCell>{credit.supplier?.companyName || credit.supplierName || 'Unknown'}</TableCell>
@@ -3191,6 +3367,54 @@ export default function Reports() {
                               </TableCell>
                               <TableCell className="text-right">
                                 ₹{Math.round(credit.paidAmount || 0)}
+                              </TableCell>
+                              <TableCell className="min-w-[260px] max-w-[360px] align-top">
+                                {sortedPayments.length > 0 ? (
+                                  <div className="text-xs space-y-2 max-h-64 overflow-y-auto pr-2">
+                                    {sortedPayments.map((p, pIdx) => {
+                                      const mode = (p.paymentMode || p.payment_mode || "cash").toString();
+                                      const collector = p.collectedBy
+                                        ? [p.collectedBy.firstName, p.collectedBy.lastName].filter(Boolean).join(" ").trim()
+                                        : "";
+                                      return (
+                                        <div
+                                          key={p._id ?? p.id ?? pIdx}
+                                          className="border-l-2 border-blue-500 pl-2 py-1.5 bg-blue-50 dark:bg-blue-950/20 rounded-r"
+                                        >
+                                          <div className="font-semibold text-blue-800 dark:text-blue-300">
+                                            ₹{Math.round(Number(p.amount ?? 0))}
+                                          </div>
+                                          <div className="text-muted-foreground mt-0.5">
+                                            {mode ? mode.toUpperCase() : "—"}
+                                            {p.paymentDate || p.createdAt
+                                              ? ` · ${new Date(p.paymentDate || p.createdAt).toLocaleDateString("en-GB", {
+                                                  day: "2-digit",
+                                                  month: "2-digit",
+                                                  year: "numeric",
+                                                  hour: "2-digit",
+                                                  minute: "2-digit",
+                                                })}`
+                                              : ""}
+                                          </div>
+                                          {collector ? (
+                                            <div className="text-muted-foreground text-xs mt-0.5">by {collector}</div>
+                                          ) : null}
+                                          {p.notes && String(p.notes).trim() ? (
+                                            <div className="text-muted-foreground italic text-xs mt-1 pt-1 border-t border-blue-200 dark:border-blue-800">
+                                              {String(p.notes).trim()}
+                                            </div>
+                                          ) : null}
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                ) : Number(credit.paidAmount) > 0 ? (
+                                  <span className="text-xs text-muted-foreground">
+                                    Total paid ₹{Math.round(credit.paidAmount)} (no per-payment log)
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">—</span>
+                                )}
                               </TableCell>
                               <TableCell className="text-right font-semibold text-blue-600">
                                 ₹{Math.round(credit.balanceAmount || 0)}
@@ -3290,7 +3514,13 @@ export default function Reports() {
             <div className="text-center py-12">
               <CreditCard className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
               <h3 className="text-lg font-semibold mb-2">No credit data available</h3>
-              <p className="text-muted-foreground">Try adjusting your filters to see data</p>
+              <p className="text-muted-foreground">
+                {creditTypeFilter === "billing" && !storeIdForEffect
+                  ? "Select a store from the header (or set a default store on your profile) to load billing credits."
+                  : creditTypeFilter === "po"
+                    ? "Select a store if needed, widen the date range or supplier filter, or confirm there are credit POs (is credit) or PO credit records for this period."
+                    : "Try widening the date range, or confirm there are credit bills (payment method credit) for this store. Bills are matched on bill date or when the bill was created."}
+              </p>
             </div>
           )}
         </>

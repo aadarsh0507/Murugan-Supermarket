@@ -37,6 +37,16 @@ const PAYMENT_METHODS = [
   { value: "other", label: "Other" },
 ];
 
+/** PO / billing credit payment rows — newest first */
+const getSortedPaymentHistory = (credit) => {
+  const list = Array.isArray(credit?.paymentHistory) ? [...credit.paymentHistory] : [];
+  list.sort(
+    (a, b) =>
+      new Date(b.paymentDate || b.createdAt || 0) - new Date(a.paymentDate || a.createdAt || 0)
+  );
+  return list;
+};
+
 const Credits = () => {
   const { toast } = useToast();
   const { selectedStore } = useAuth();
@@ -1767,7 +1777,7 @@ const Credits = () => {
                   )}
                   <TableHead>Initial Amount</TableHead>
                   <TableHead>Current Amount</TableHead>
-                  <TableHead>Paid Amount</TableHead>
+                  <TableHead className="min-w-[148px]">Paid (history)</TableHead>
                   <TableHead>Balance</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>
@@ -1825,7 +1835,9 @@ const Credits = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  (creditTypeFilter === "po" ? credits : customerCredits).map((credit) => (
+                  (creditTypeFilter === "po" ? credits : customerCredits).map((credit) => {
+                    const paymentRows = getSortedPaymentHistory(credit);
+                    return (
                     <TableRow key={credit._id}>
                       <TableCell>
                         {credit.status !== "paid" && (credit.balanceAmount || 0) > 0 && (
@@ -1908,8 +1920,41 @@ const Credits = () => {
                           return `₹${Math.round(currentAmount)}`;
                         })()}
                       </TableCell>
-                      <TableCell>
-                        ₹{Math.round(credit.paidAmount || 0)}
+                      <TableCell className="min-w-[140px] max-w-[220px] align-top text-left">
+                        <div className="font-semibold text-sm">
+                          ₹{Math.round(credit.paidAmount || 0)}
+                        </div>
+                        {paymentRows.length > 0 ? (
+                          <div className="mt-1.5 space-y-1 max-h-28 overflow-y-auto text-[11px] leading-snug text-muted-foreground border-t border-border pt-1.5">
+                            {paymentRows.map((p, pIdx) => {
+                              const mode = (p.paymentMode || p.payment_mode || "cash").toString().toUpperCase();
+                              const when = p.paymentDate || p.createdAt;
+                              return (
+                                <div
+                                  key={p._id ?? p.id ?? pIdx}
+                                  className="rounded border border-blue-100 dark:border-blue-900/40 bg-blue-50/60 dark:bg-blue-950/20 px-1.5 py-1"
+                                >
+                                  <span className="font-medium text-foreground">
+                                    ₹{Math.round(Number(p.amount ?? 0))}
+                                  </span>
+                                  <span className="text-muted-foreground"> · {mode}</span>
+                                  {when ? (
+                                    <div className="text-[10px] opacity-90">
+                                      {format(new Date(when), "dd-MM-yyyy HH:mm")}
+                                    </div>
+                                  ) : null}
+                                  {p.notes && String(p.notes).trim() ? (
+                                    <div className="text-[10px] italic truncate" title={String(p.notes).trim()}>
+                                      {String(p.notes).trim()}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : Number(credit.paidAmount) > 0 ? (
+                          <p className="text-[10px] text-muted-foreground mt-1 italic">No per-payment log</p>
+                        ) : null}
                       </TableCell>
                       <TableCell className="font-semibold text-blue-600">
                         ₹{Math.round(credit.balanceAmount || 0)}
@@ -2014,7 +2059,8 @@ const Credits = () => {
                         </div>
                       </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 )}
               </TableBody>
             </Table>
@@ -2250,6 +2296,69 @@ const Credits = () => {
                 </div>
               </div>
               </div>
+
+              {selectedCredit &&
+                (() => {
+                  const payRows = getSortedPaymentHistory(selectedCredit);
+                  return (
+                    <div className="rounded-lg border bg-card">
+                      <div className="border-b px-4 py-3">
+                        <h3 className="text-sm font-semibold">Payment history</h3>
+                      </div>
+                      <div className="p-4">
+                        <p className="text-sm mb-3">
+                          <span className="text-muted-foreground">Total paid: </span>
+                          <span className="font-semibold">₹{Math.round(selectedCredit.paidAmount || 0)}</span>
+                          <span className="text-muted-foreground"> · Balance: </span>
+                          <span className="font-semibold text-blue-600">
+                            ₹{Math.round(selectedCredit.balanceAmount || 0)}
+                          </span>
+                        </p>
+                        {payRows.length > 0 ? (
+                          <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                            {payRows.map((p, pIdx) => {
+                              const mode = (p.paymentMode || p.payment_mode || "cash").toString().toUpperCase();
+                              const when = p.paymentDate || p.createdAt;
+                              const collector = p.collectedBy
+                                ? [p.collectedBy.firstName, p.collectedBy.lastName].filter(Boolean).join(" ").trim()
+                                : "";
+                              return (
+                                <div
+                                  key={p._id ?? p.id ?? pIdx}
+                                  className="text-sm border-l-4 border-blue-500 pl-3 py-2 bg-blue-50/80 dark:bg-blue-950/30 rounded-r"
+                                >
+                                  <div className="font-semibold text-blue-900 dark:text-blue-200">
+                                    ₹{Math.round(Number(p.amount ?? 0))}{" "}
+                                    <span className="text-xs font-normal text-muted-foreground">({mode})</span>
+                                  </div>
+                                  {when ? (
+                                    <div className="text-xs text-muted-foreground mt-0.5">
+                                      {format(new Date(when), "dd-MM-yyyy HH:mm")}
+                                    </div>
+                                  ) : null}
+                                  {collector ? (
+                                    <div className="text-xs text-muted-foreground">by {collector}</div>
+                                  ) : null}
+                                  {p.notes && String(p.notes).trim() ? (
+                                    <div className="text-xs italic text-muted-foreground mt-1 border-t border-blue-200/60 dark:border-blue-800 pt-1">
+                                      {String(p.notes).trim()}
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : Number(selectedCredit.paidAmount) > 0 ? (
+                          <p className="text-xs text-muted-foreground italic">
+                            Total paid is recorded but there is no per-payment log for this bill.
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">No payments recorded yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
               <div className="rounded-lg border bg-card">
                 <div className="border-b px-4 py-3 flex items-center justify-between">
@@ -2574,6 +2683,53 @@ const Credits = () => {
                   </div>
                 </div>
               )}
+
+              {(() => {
+                const payRows = getSortedPaymentHistory(selectedCredit);
+                if (payRows.length === 0 && !(Number(selectedCredit.paidAmount) > 0)) return null;
+                return (
+                  <div className="mt-4 p-4 bg-emerald-50 dark:bg-emerald-950/20 rounded-lg border border-emerald-200 dark:border-emerald-800">
+                    <Label className="text-sm font-semibold text-emerald-800 dark:text-emerald-200 mb-2 block">
+                      Payment history (₹{Math.round(selectedCredit.paidAmount || 0)} total)
+                    </Label>
+                    {payRows.length > 0 ? (
+                      <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {payRows.map((p, pIdx) => {
+                          const mode = (p.paymentMode || p.payment_mode || "cash").toString().toUpperCase();
+                          const when = p.paymentDate || p.createdAt;
+                          const collector = p.collectedBy
+                            ? [p.collectedBy.firstName, p.collectedBy.lastName].filter(Boolean).join(" ").trim()
+                            : "";
+                          return (
+                            <div
+                              key={p._id ?? p.id ?? pIdx}
+                              className="text-sm border-l-4 border-emerald-600 pl-3 py-1.5 bg-white dark:bg-gray-900 rounded"
+                            >
+                              <p className="font-semibold text-emerald-900 dark:text-emerald-100">
+                                ₹{Math.round(Number(p.amount ?? 0))}{" "}
+                                <span className="text-xs font-normal text-muted-foreground">({mode})</span>
+                              </p>
+                              {when ? (
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {format(new Date(when), "dd-MM-yyyy HH:mm")}
+                                  {collector ? ` · ${collector}` : ""}
+                                </p>
+                              ) : null}
+                              {p.notes && String(p.notes).trim() ? (
+                                <p className="text-xs text-muted-foreground italic mt-1">{String(p.notes).trim()}</p>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground italic">
+                        Paid total is on file but individual instalments were not logged.
+                      </p>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
           )}
           <DialogFooter>
@@ -2592,7 +2748,10 @@ const Credits = () => {
       <Dialog open={changesDialogOpen} onOpenChange={setChangesDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Amount Change History</DialogTitle>
+            <DialogTitle>Credit history</DialogTitle>
+            <p className="text-sm text-muted-foreground font-normal">
+              Amount changes and payment instalments for this credit
+            </p>
           </DialogHeader>
           {selectedCreditForChanges && (() => {
             // Calculate initial amount
@@ -2823,6 +2982,62 @@ const Credits = () => {
                       })}
                     </div>
                   )}
+                </div>
+
+                <div className="space-y-3 pt-2 border-t border-border">
+                  <h4 className="font-semibold text-sm">Payment instalments</h4>
+                  {(() => {
+                    const pr = getSortedPaymentHistory(selectedCreditForChanges);
+                    if (pr.length === 0 && !(Number(selectedCreditForChanges.paidAmount) > 0)) {
+                      return <p className="text-muted-foreground text-sm">No payments recorded</p>;
+                    }
+                    if (pr.length === 0) {
+                      return (
+                        <p className="text-muted-foreground text-sm italic">
+                          Total paid ₹{Math.round(selectedCreditForChanges.paidAmount || 0)} — no per-payment log.
+                        </p>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                        <p className="text-xs text-muted-foreground">
+                          Total paid:{" "}
+                          <span className="font-semibold text-foreground">
+                            ₹{Math.round(selectedCreditForChanges.paidAmount || 0)}
+                          </span>
+                        </p>
+                        {pr.map((p, pIdx) => {
+                          const mode = (p.paymentMode || p.payment_mode || "cash").toString().toUpperCase();
+                          const when = p.paymentDate || p.createdAt;
+                          const collector = p.collectedBy
+                            ? [p.collectedBy.firstName, p.collectedBy.lastName].filter(Boolean).join(" ").trim()
+                            : "";
+                          return (
+                            <div
+                              key={p._id ?? p.id ?? pIdx}
+                              className="p-3 border-l-4 border-emerald-600 bg-emerald-50/80 dark:bg-emerald-950/25 rounded-lg text-sm"
+                            >
+                              <div className="font-semibold">
+                                ₹{Math.round(Number(p.amount ?? 0))}{" "}
+                                <span className="text-xs font-normal text-muted-foreground">({mode})</span>
+                              </div>
+                              {when ? (
+                                <div className="text-xs text-muted-foreground mt-1">
+                                  {format(new Date(when), "dd-MM-yyyy HH:mm:ss")}
+                                  {collector ? ` · ${collector}` : ""}
+                                </div>
+                              ) : null}
+                              {p.notes && String(p.notes).trim() ? (
+                                <div className="text-xs text-muted-foreground mt-2 pt-2 border-t border-emerald-200/70 dark:border-emerald-800">
+                                  {String(p.notes).trim()}
+                                </div>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             );

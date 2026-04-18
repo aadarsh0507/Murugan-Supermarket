@@ -1,4 +1,5 @@
 import { query, transaction } from '../db/index.js';
+import { parseQueryableDateBound } from '../utils/parseDateRangeBounds.js';
 
 // Cached check for items table (used by query(), not connection) - so we don't JOIN when table doesn't exist
 let itemsTableExistsForMrpCache = null;
@@ -384,6 +385,8 @@ const reduceStockForBillItem = async (connection, item, storeId) => {
 
 const BILL_NUMBER_PREFIX = 'B202501';
 const BILL_SEQUENCE_PAD = 3;
+/** Retries when two cashiers save at once and both read the same MAX sequence. */
+const BILL_NO_ALLOCATION_RETRIES = 12;
 
 // Get bill number prefix based on store ID
 const getBillNumberPrefix = (storeId) => {
@@ -572,29 +575,27 @@ const ensureBillingTablesExist = async () => {
   return ensureBillingTablesPromise;
 };
 
+/**
+ * Next bill number for a store: one running series for all users (prefix is per store only).
+ * Uses MAX(numeric suffix), not "latest row by id", so sequence stays correct after imports/reordering.
+ */
 const getNextBillNumber = async (connection, storeId) => {
   const prefix = getBillNumberPrefix(storeId);
+  const prefixLen = prefix.length;
+  const likePattern = `${prefix}%`;
+  const storeNum = Number(storeId);
 
   const [rows] = await connection.query(
-    `SELECT bill_no 
-     FROM bills 
-     WHERE bill_no LIKE ? 
-       AND store_id = ?
-     ORDER BY id DESC 
-     LIMIT 1`,
-    [`${prefix}%`, storeId]
+    `SELECT COALESCE(MAX(CAST(SUBSTRING(bill_no, ?) AS UNSIGNED)), 0) AS max_seq
+     FROM bills
+     WHERE store_id = ?
+       AND bill_no LIKE ?
+       AND SUBSTRING(bill_no, ?) REGEXP '^[0-9]+$'`,
+    [prefixLen + 1, storeNum, likePattern, prefixLen + 1]
   );
 
-  let sequence = 1;
-  if (rows.length > 0) {
-    const lastBillNo = rows[0].bill_no || '';
-    const numericPart = lastBillNo.slice(prefix.length);
-    const parsed = Number.parseInt(numericPart, 10);
-    if (!Number.isNaN(parsed)) {
-      sequence = parsed + 1;
-    }
-  }
-
+  const maxSeq = Number(rows[0]?.max_seq ?? 0);
+  const sequence = (Number.isFinite(maxSeq) ? maxSeq : 0) + 1;
   const counter = String(sequence).padStart(BILL_SEQUENCE_PAD, '0');
   return `${prefix}${counter}`;
 };
@@ -753,38 +754,62 @@ export const createBill = async ({
 }) => {
   await ensureBillingTablesExist();
   return transaction(async (connection) => {
-    const resolvedBillNo =
-      billNo?.trim() && billNo.trim().length > 0
-        ? billNo.trim()
-        : await getNextBillNumber(connection, storeId);
+    const providedBillNo = billNo?.trim() && billNo.trim().length > 0 ? billNo.trim() : null;
+    const autoAllocate = !providedBillNo;
+    const maxAttempts = autoAllocate ? BILL_NO_ALLOCATION_RETRIES : 1;
 
-    const [result] = await connection.execute(
-      `INSERT INTO bills (
+    let resolvedBillNo = providedBillNo ?? (await getNextBillNumber(connection, storeId));
+    let result;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (autoAllocate && attempt > 0) {
+        resolvedBillNo = await getNextBillNumber(connection, storeId);
+      }
+      try {
+        const [insertRows] = await connection.execute(
+          `INSERT INTO bills (
         bill_no, store_id, user_id, date,
         customer_id, customer_name, customer_phone, customer_email, customer_address, customer_gstin,
         payment_method, payment_status, transaction_id, subtotal, tax, discount, total,
         created_at, updated_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-      [
-        resolvedBillNo,
-        storeId,
-        userId,
-        date,
-        customerId || null,
-        customerName || null,
-        customerPhone || null,
-        customerEmail || null,
-        customerAddress || null,
-        customerGstin || null,
-        paymentMethod || 'cash',
-        paymentStatus || 'paid',
-        transactionId || null,
-        subtotal,
-        tax,
-        discount,
-        total
-      ]
-    );
+          [
+            resolvedBillNo,
+            storeId,
+            userId,
+            date,
+            customerId || null,
+            customerName || null,
+            customerPhone || null,
+            customerEmail || null,
+            customerAddress || null,
+            customerGstin || null,
+            paymentMethod || 'cash',
+            paymentStatus || 'paid',
+            transactionId || null,
+            subtotal,
+            tax,
+            discount,
+            total
+          ]
+        );
+        result = insertRows;
+        break;
+      } catch (err) {
+        const dup =
+          err?.code === 'ER_DUP_ENTRY' ||
+          err?.errno === 1062 ||
+          String(err?.sqlMessage || '').toLowerCase().includes('duplicate');
+        if (autoAllocate && dup && attempt < maxAttempts - 1) {
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    if (!result) {
+      throw new Error('Unable to allocate a unique bill number after several attempts.');
+    }
 
     const normalizedItems = Array.isArray(items)
       ? items
@@ -1060,11 +1085,16 @@ export const findLatestCustomerByPhone = async (phone, storeId) => {
   };
 };
 
+const isPlainYmd = (raw) => {
+  if (raw === undefined || raw === null) return false;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim());
+};
+
 export const listBills = async (filters = {}) => {
   await ensureBillingTablesExist();
 
   const page = Math.max(Number.parseInt(filters.page, 10) || 1, 1);
-  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 200);
+  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 10000);
   const offset = (page - 1) * limit;
 
   const conditions = [];
@@ -1095,20 +1125,35 @@ export const listBills = async (filters = {}) => {
     params.push(Number(filters.billId));
   }
 
-  if (filters.startDate) {
-    // Set startDate to beginning of day (00:00:00.000)
-    const startDate = new Date(filters.startDate);
-    startDate.setHours(0, 0, 0, 0);
-    conditions.push('b.date >= ?');
-    params.push(startDate);
-  }
+  // Plain YYYY-MM-DD: compare calendar dates only (avoids TZ mismatches vs HTML date inputs + bill `date`).
+  const startPlain = filters.startDate && isPlainYmd(filters.startDate) ? String(filters.startDate).trim() : null;
+  const endPlain = filters.endDate && isPlainYmd(filters.endDate) ? String(filters.endDate).trim() : null;
 
-  if (filters.endDate) {
-    // Set endDate to end of day (23:59:59.999) to include all bills from that day
-    const endDate = new Date(filters.endDate);
-    endDate.setHours(23, 59, 59, 999);
-    conditions.push('b.date <= ?');
-    params.push(endDate);
+  if (startPlain && endPlain) {
+    conditions.push(
+      '((DATE(b.date) BETWEEN ? AND ?) OR (DATE(b.created_at) BETWEEN ? AND ?))'
+    );
+    params.push(startPlain, endPlain, startPlain, endPlain);
+  } else {
+    const startParsed = filters.startDate
+      ? parseQueryableDateBound(filters.startDate, 'start')
+      : null;
+    const endParsed = filters.endDate
+      ? parseQueryableDateBound(filters.endDate, 'end')
+      : null;
+
+    if (startParsed && endParsed) {
+      conditions.push(
+        '((b.date >= ? AND b.date <= ?) OR (b.created_at >= ? AND b.created_at <= ?))'
+      );
+      params.push(startParsed, endParsed, startParsed, endParsed);
+    } else if (startParsed) {
+      conditions.push('(b.date >= ? OR b.created_at >= ?)');
+      params.push(startParsed, startParsed);
+    } else if (endParsed) {
+      conditions.push('(b.date <= ? OR b.created_at <= ?)');
+      params.push(endParsed, endParsed);
+    }
   }
 
   if (filters.search) {
