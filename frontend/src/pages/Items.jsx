@@ -733,7 +733,6 @@ export default function Items() {
       description: "",
       brand: "",
       brandId: "",
-    brandId: "",
       price: "",
       costPrice: "",
       mrp: "",
