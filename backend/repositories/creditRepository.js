@@ -1,4 +1,5 @@
 import { query, transaction } from '../db/index.js';
+import { parseQueryableDateBound } from '../utils/parseDateRangeBounds.js';
 
 let ensureTablesPromise;
 
@@ -435,11 +436,16 @@ export const getCreditById = async (creditId) => {
   return credit;
 };
 
+const isPlainYmd = (raw) => {
+  if (raw === undefined || raw === null) return false;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim());
+};
+
 export const getAllCredits = async (filters = {}) => {
   await ensureTables();
 
   const page = Math.max(Number.parseInt(filters.page, 10) || 1, 1);
-  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 200);
+  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 10000);
   const offset = (page - 1) * limit;
 
   const conditions = [];
@@ -460,14 +466,28 @@ export const getAllCredits = async (filters = {}) => {
     params.push(filters.status);
   }
 
-  if (filters.startDate) {
-    conditions.push('DATE(c.order_date) >= ?');
-    params.push(filters.startDate);
-  }
+  const startPlain = filters.startDate && isPlainYmd(filters.startDate) ? String(filters.startDate).trim() : null;
+  const endPlain = filters.endDate && isPlainYmd(filters.endDate) ? String(filters.endDate).trim() : null;
 
-  if (filters.endDate) {
-    conditions.push('DATE(c.order_date) <= ?');
-    params.push(filters.endDate);
+  if (startPlain && endPlain) {
+    conditions.push('DATE(c.order_date) BETWEEN ? AND ?');
+    params.push(startPlain, endPlain);
+  } else {
+    if (filters.startDate) {
+      const startDate = parseQueryableDateBound(filters.startDate, 'start');
+      if (startDate) {
+        conditions.push('c.order_date >= ?');
+        params.push(startDate);
+      }
+    }
+
+    if (filters.endDate) {
+      const endDate = parseQueryableDateBound(filters.endDate, 'end');
+      if (endDate) {
+        conditions.push('c.order_date <= ?');
+        params.push(endDate);
+      }
+    }
   }
 
   if (filters.search) {

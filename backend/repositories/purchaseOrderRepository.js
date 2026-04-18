@@ -1,4 +1,5 @@
 import { query, transaction } from '../db/index.js';
+import { parseQueryableDateBound } from '../utils/parseDateRangeBounds.js';
 
 // Helper function to check if items table exists
 const checkItemsTableExists = async (connection) => {
@@ -1127,11 +1128,16 @@ export const updatePurchaseOrder = async (
   });
 };
 
+const isPlainYmd = (raw) => {
+  if (raw === undefined || raw === null) return false;
+  return /^\d{4}-\d{2}-\d{2}$/.test(String(raw).trim());
+};
+
 export const listPurchaseOrders = async (filters = {}) => {
   await ensureTables();
 
   const page = Math.max(Number.parseInt(filters.page, 10) || 1, 1);
-  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 200);
+  const limit = Math.min(Math.max(Number.parseInt(filters.limit, 10) || 20, 1), 10000);
   const offset = (page - 1) * limit;
 
   const conditions = [];
@@ -1158,20 +1164,28 @@ export const listPurchaseOrders = async (filters = {}) => {
     params.push(filters.isCredit ? 1 : 0);
   }
 
-  if (filters.startDate) {
-    // Set startDate to beginning of day (00:00:00.000)
-    const startDate = new Date(filters.startDate);
-    startDate.setHours(0, 0, 0, 0);
-    conditions.push('p.order_date >= ?');
-    params.push(startDate);
-  }
+  const startPlain = filters.startDate && isPlainYmd(filters.startDate) ? String(filters.startDate).trim() : null;
+  const endPlain = filters.endDate && isPlainYmd(filters.endDate) ? String(filters.endDate).trim() : null;
 
-  if (filters.endDate) {
-    // Set endDate to end of day (23:59:59.999) to include all orders from that day
-    const endDate = new Date(filters.endDate);
-    endDate.setHours(23, 59, 59, 999);
-    conditions.push('p.order_date <= ?');
-    params.push(endDate);
+  if (startPlain && endPlain) {
+    conditions.push('DATE(p.order_date) BETWEEN ? AND ?');
+    params.push(startPlain, endPlain);
+  } else {
+    if (filters.startDate) {
+      const startDate = parseQueryableDateBound(filters.startDate, 'start');
+      if (startDate) {
+        conditions.push('p.order_date >= ?');
+        params.push(startDate);
+      }
+    }
+
+    if (filters.endDate) {
+      const endDate = parseQueryableDateBound(filters.endDate, 'end');
+      if (endDate) {
+        conditions.push('p.order_date <= ?');
+        params.push(endDate);
+      }
+    }
   }
 
   if (filters.search) {
