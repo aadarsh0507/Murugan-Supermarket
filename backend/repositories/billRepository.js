@@ -638,8 +638,19 @@ const getUserDisplayName = (row) => {
   return null;
 };
 
+const ymdFromMysqlDateValue = (value) => {
+  if (value == null || value === '') return null;
+  const s = String(value).trim();
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : null;
+};
+
 const mapBill = (row, items = []) => {
   if (!row) return null;
+  const dateCalendarYmd =
+    row.bill_date_ymd != null && String(row.bill_date_ymd).trim() !== ''
+      ? String(row.bill_date_ymd).trim().slice(0, 10)
+      : ymdFromMysqlDateValue(row.date);
   return {
     id: row.id,
     billNo: row.bill_no,
@@ -648,6 +659,8 @@ const mapBill = (row, items = []) => {
     userName: getUserDisplayName(row),
     userEmail: row.user_email ?? null,
     date: row.date,
+    /** Same calendar day MySQL uses for DATE(b.date); avoids ISO-UTC JSON shifting labels vs filters. */
+    dateCalendarYmd: dateCalendarYmd,
     customerId: row.customer_id,
     customerName: row.customer_name,
     customerPhone: row.customer_phone,
@@ -679,6 +692,7 @@ export const getBillById = async (billId, { includeItems = true } = {}) => {
             u.last_name AS user_last_name,
             u.email AS user_email,
             b.date,
+            DATE_FORMAT(b.date, '%Y-%m-%d') AS bill_date_ymd,
             b.customer_id,
             b.customer_name,
             b.customer_phone,
@@ -772,7 +786,7 @@ export const createBill = async ({
         customer_id, customer_name, customer_phone, customer_email, customer_address, customer_gstin,
         payment_method, payment_status, transaction_id, subtotal, tax, discount, total,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             resolvedBillNo,
             storeId,
@@ -790,7 +804,9 @@ export const createBill = async ({
             subtotal,
             tax,
             discount,
-            total
+            total,
+            date,
+            date
           ]
         );
         result = insertRows;
@@ -910,6 +926,7 @@ export const createBill = async ({
               u.last_name AS user_last_name,
               u.email AS user_email,
               b.date,
+              DATE_FORMAT(b.date, '%Y-%m-%d') AS bill_date_ymd,
               b.customer_id,
               b.customer_name,
               b.customer_phone,
@@ -987,6 +1004,7 @@ export const getBillByBillNo = async (billNo, { includeItems = true } = {}) => {
             u.last_name AS user_last_name,
             u.email AS user_email,
             b.date,
+            DATE_FORMAT(b.date, '%Y-%m-%d') AS bill_date_ymd,
             b.customer_id,
             b.customer_name,
             b.customer_phone,
@@ -1129,11 +1147,17 @@ export const listBills = async (filters = {}) => {
   const startPlain = filters.startDate && isPlainYmd(filters.startDate) ? String(filters.startDate).trim() : null;
   const endPlain = filters.endDate && isPlainYmd(filters.endDate) ? String(filters.endDate).trim() : null;
 
+  // Use bill business `date` only so the range matches the same column the UI groups by
+  // (avoid OR on created_at pulling rows that then appear under the wrong calendar day).
   if (startPlain && endPlain) {
-    conditions.push(
-      '((DATE(b.date) BETWEEN ? AND ?) OR (DATE(b.created_at) BETWEEN ? AND ?))'
-    );
-    params.push(startPlain, endPlain, startPlain, endPlain);
+    conditions.push('DATE(b.date) BETWEEN ? AND ?');
+    params.push(startPlain, endPlain);
+  } else if (startPlain && !endPlain) {
+    conditions.push('DATE(b.date) = ?');
+    params.push(startPlain);
+  } else if (!startPlain && endPlain) {
+    conditions.push('DATE(b.date) = ?');
+    params.push(endPlain);
   } else {
     const startParsed = filters.startDate
       ? parseQueryableDateBound(filters.startDate, 'start')
@@ -1143,16 +1167,15 @@ export const listBills = async (filters = {}) => {
       : null;
 
     if (startParsed && endParsed) {
-      conditions.push(
-        '((b.date >= ? AND b.date <= ?) OR (b.created_at >= ? AND b.created_at <= ?))'
-      );
-      params.push(startParsed, endParsed, startParsed, endParsed);
+      conditions.push('(b.date >= ? AND b.date <= ?)');
+      params.push(startParsed, endParsed);
     } else if (startParsed) {
-      conditions.push('(b.date >= ? OR b.created_at >= ?)');
-      params.push(startParsed, startParsed);
+      // Single-bound ISO: cap to end of that same local calendar day in JS is ambiguous; use start-of-next-day exclusive if needed later.
+      conditions.push('b.date >= ?');
+      params.push(startParsed);
     } else if (endParsed) {
-      conditions.push('(b.date <= ? OR b.created_at <= ?)');
-      params.push(endParsed, endParsed);
+      conditions.push('b.date <= ?');
+      params.push(endParsed);
     }
   }
 
@@ -1178,6 +1201,7 @@ export const listBills = async (filters = {}) => {
             u.last_name AS user_last_name,
             u.email AS user_email,
             b.date,
+            DATE_FORMAT(b.date, '%Y-%m-%d') AS bill_date_ymd,
             b.customer_id,
             b.customer_name,
             b.customer_phone,
