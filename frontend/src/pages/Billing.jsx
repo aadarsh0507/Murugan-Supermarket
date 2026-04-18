@@ -125,6 +125,12 @@ const normalizeItem = (item = {}) => {
   };
 };
 
+/** Business calendar day for the POS machine (aligns with report date filters). */
+const localCalendarYmd = () => {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+};
+
 const buildBillDraft = (index) => {
   return {
     id: `bill-${createId()}`,
@@ -1320,6 +1326,7 @@ export default function Billing() {
     const runSaveBill = async (transactionId) => {
       const response = await billsAPI.createBill({
         storeId: selectedStore.id,
+        date: localCalendarYmd(),
         customerName: trimmedCustomerName || undefined,
         customerPhone: trimmedCustomerPhone || undefined,
         customerId: trimmedCustomerId || trimmedCustomerPhone || undefined,

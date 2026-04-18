@@ -11,6 +11,7 @@ import {
   upsertCustomerByPhone as upsertCustomerRepo,
   getCustomerByPhone as getCustomerMasterByPhoneRepo
 } from '../repositories/customerRepository.js';
+import { resolveBillMysqlDatetime } from '../utils/businessWallClock.js';
 
 const respondValidationErrors = (req, res) => {
   const errors = validationResult(req);
@@ -76,8 +77,14 @@ export const createBillValidation = [
     .withMessage('billNo must be between 2 and 50 characters'),
   body('date')
     .optional()
-    .isISO8601()
-    .withMessage('date must be a valid ISO8601 string'),
+    .custom((value) => {
+      if (value === undefined || value === null || value === '') return true;
+      const s = String(value).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return true;
+      const d = new Date(s);
+      return !Number.isNaN(d.getTime());
+    })
+    .withMessage('date must be YYYY-MM-DD or a parseable date/time string'),
   body('customerName')
     .optional({ checkFalsy: true })
     .trim()
@@ -255,11 +262,18 @@ export const createBill = async (req, res) => {
       });
     }
 
+    let billMysqlDatetime;
+    try {
+      billMysqlDatetime = resolveBillMysqlDatetime(date);
+    } catch {
+      billMysqlDatetime = resolveBillMysqlDatetime(null);
+    }
+
     const payload = {
       billNo: billNo?.trim(),
       storeId: resolvedStoreId,
       userId: req.user?.id ?? req.user?._id ?? null,
-      date: date ? new Date(date) : new Date(),
+      date: billMysqlDatetime,
       customerId,
       customerName,
       customerPhone,

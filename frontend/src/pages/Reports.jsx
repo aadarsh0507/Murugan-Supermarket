@@ -32,6 +32,27 @@ import { getErrorMessage, getErrorTitle } from "@/utils/errorMessages";
 const COLORS = ['hsl(239 70% 55%)', 'hsl(142 76% 45%)', 'hsl(38 92% 50%)', 'hsl(0 84% 60%)', 'hsl(263 70% 50%)'];
 
 const DATE_INPUT_RE = /^\d{4}-\d{2}-\d{2}$/;
+const EU_DMY_RE = /^(\d{2})-(\d{2})-(\d{4})$/;
+const EU_DMY_SLASH_RE = /^(\d{2})[/.](\d{2})[/.](\d{4})$/;
+
+/** Normalize persisted or manual values to YYYY-MM-DD for API + regex checks. */
+function normalizeReportDateInput(value) {
+  if (value == null) return "";
+  const s = String(value).trim();
+  if (s === "") return "";
+  if (DATE_INPUT_RE.test(s)) return s;
+  const slash = s.match(EU_DMY_SLASH_RE);
+  if (slash) {
+    const [, dd, mm, yyyy] = slash;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  const m = s.match(EU_DMY_RE);
+  if (m) {
+    const [, dd, mm, yyyy] = m;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+  return s;
+}
 
 /** HTML date input value → start of that local calendar day as ISO (for API range filters). */
 function localDateInputToIsoStart(dateYmd) {
@@ -49,18 +70,74 @@ function localDateInputToIsoEnd(dateYmd) {
   return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString();
 }
 
+/**
+ * Calendar YYYY-MM-DD for charts/tables — must match backend DATE(b.date) filters.
+ * Prefer API `dateCalendarYmd` (from SQL DATE_FORMAT); never trust ISO `date` prefix alone (UTC JSON shift).
+ */
+function billCalendarYmdForReports(bill) {
+  const fromApi = bill?.dateCalendarYmd ?? bill?.date_calendar_ymd;
+  if (fromApi != null && String(fromApi).trim() !== "") {
+    const t = String(fromApi).trim().slice(0, 10);
+    if (DATE_INPUT_RE.test(t)) return t;
+  }
+  const raw = bill?.date ?? bill?.createdAt ?? bill?.created_at;
+  if (raw == null || raw === "") return null;
+  const s = String(raw).trim();
+  // Space-separated MySQL datetime: use literal date part only (no TZ).
+  if (/^\d{4}-\d{2}-\d{2} \d/.test(s)) return s.slice(0, 10);
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return null;
+  // ISO / timestamp: use UTC calendar day so we match a typical server-stored UTC instant, not local drift.
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+}
+
 function buildReportApiDateParams(dateFrom, dateTo) {
   const out = {};
+  let nf = dateFrom ? normalizeReportDateInput(dateFrom) : "";
+  let nt = dateTo ? normalizeReportDateInput(dateTo) : "";
+  // One date picked → treat as a single calendar day (avoids open-ended API ranges).
+  if (nf && !nt) nt = nf;
+  if (nt && !nf) nf = nt;
   // Send plain YYYY-MM-DD so the backend can filter with DATE(...) and avoid TZ drift vs ISO instants.
-  if (dateFrom) {
-    const s = String(dateFrom).trim();
-    out.startDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoStart(dateFrom) ?? dateFrom;
+  if (nf) {
+    const s = String(nf).trim();
+    out.startDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoStart(s) ?? s;
   }
-  if (dateTo) {
-    const s = String(dateTo).trim();
-    out.endDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoEnd(dateTo) ?? dateTo;
+  if (nt) {
+    const s = String(nt).trim();
+    out.endDate = DATE_INPUT_RE.test(s) ? s : localDateInputToIsoEnd(s) ?? s;
   }
   return out;
+}
+
+/** Keep only bills whose business calendar day is within [from, to] (YYYY-MM-DD), inclusive. */
+function filterBillsByReportDateRange(bills, dateFrom, dateTo) {
+  if (!Array.isArray(bills) || bills.length === 0) return bills;
+  let nf = dateFrom ? normalizeReportDateInput(dateFrom) : "";
+  let nt = dateTo ? normalizeReportDateInput(dateTo) : "";
+  if (nf && !nt) nt = nf;
+  if (nt && !nf) nf = nt;
+  const from = nf && DATE_INPUT_RE.test(String(nf).trim()) ? String(nf).trim() : "";
+  const to = nt && DATE_INPUT_RE.test(String(nt).trim()) ? String(nt).trim() : "";
+  if (!from && !to) return bills;
+  const lo = from || to;
+  const hi = to || from;
+  return bills.filter((bill) => {
+    const ymd = billCalendarYmdForReports(bill);
+    if (!ymd) return false;
+    return ymd >= lo && ymd <= hi;
+  });
+}
+
+/** Display YYYY-MM-DD as en-IN calendar (matches filter intent, avoids UTC `bill.date` display shift). */
+function formatReportYmdEnIn(ymd) {
+  if (!ymd || !DATE_INPUT_RE.test(ymd)) return "";
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
 }
 
 /** Align Reports PO rows with Credits: credit POs that only exist on purchase_orders (no po_credits row yet). */
@@ -199,8 +276,8 @@ export default function Reports() {
       if (saved.reportType) setReportType(saved.reportType);
       if (saved.poReportType) setPoReportType(saved.poReportType);
       if (saved.poViewMode) setPoViewMode(saved.poViewMode);
-      if (saved.dateFrom) setDateFrom(saved.dateFrom);
-      if (saved.dateTo) setDateTo(saved.dateTo);
+      if (saved.dateFrom) setDateFrom(normalizeReportDateInput(saved.dateFrom) || saved.dateFrom);
+      if (saved.dateTo) setDateTo(normalizeReportDateInput(saved.dateTo) || saved.dateTo);
       if (saved.selectedUserId) setSelectedUserId(saved.selectedUserId);
       if (saved.selectedSupplierId) setSelectedSupplierId(saved.selectedSupplierId);
       if (saved.selectedStoreId) setSelectedStoreId(saved.selectedStoreId);
@@ -849,7 +926,9 @@ export default function Reports() {
       } else if (response.data?.data) {
         billsData = Array.isArray(response.data.data) ? response.data.data : [];
       }
-      
+
+      billsData = filterBillsByReportDateRange(billsData, dateFrom, dateTo);
+
       setBills(billsData);
 
       // If detailed report, fetch items for each bill
@@ -941,9 +1020,12 @@ export default function Reports() {
     if (type === "monthly") {
       // Aggregate by month key yyyy-MM so both chart and table are in chronological month order
       const monthlyData = bills.reduce((acc, bill) => {
-        const date = new Date(bill.createdAt);
-        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-        const monthName = date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+        const ymd = billCalendarYmdForReports(bill);
+        if (!ymd) return acc;
+        const monthKey = ymd.slice(0, 7);
+        const [y, mo] = ymd.split("-").map(Number);
+        const labelDate = new Date(y, mo - 1, 1);
+        const monthName = labelDate.toLocaleDateString("en-US", { month: "short", year: "numeric" });
 
         if (!acc[monthKey]) {
           acc[monthKey] = { month: monthName, revenue: 0, bills: 0, items: 0 };
@@ -966,11 +1048,18 @@ export default function Reports() {
       // Show the detailed monthly table in the same chronological order as the chart
       tableData = chartData;
     } else if (type === "daily") {
-      // Aggregate by ISO date so days are in correct order
+      // Aggregate by bill business calendar day (aligns with DATE(b.date) filter, not UTC createdAt).
       const dailyData = bills.reduce((acc, bill) => {
-        const date = new Date(bill.createdAt);
-        const dayKey = date.toISOString().split('T')[0];
-        const dayName = date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        const ymd = billCalendarYmdForReports(bill);
+        if (!ymd) return acc;
+        const dayKey = ymd;
+        const [y, mo, da] = ymd.split("-").map(Number);
+        const labelDate = new Date(y, mo - 1, da);
+        const dayName = labelDate.toLocaleDateString("en-US", {
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        });
 
         if (!acc[dayKey]) {
           acc[dayKey] = { day: dayName, revenue: 0, bills: 0, items: 0 };
@@ -2302,7 +2391,16 @@ export default function Reports() {
                         {detailedBills
                           .slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
                           .map((bill, index) => {
-                          const billDate = bill.date ? new Date(bill.date).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' }) : 'N/A';
+                          const billYmd = billCalendarYmdForReports(bill);
+                          const billDate = billYmd
+                            ? formatReportYmdEnIn(billYmd)
+                            : bill.date
+                              ? new Date(bill.date).toLocaleDateString("en-IN", {
+                                  day: "2-digit",
+                                  month: "2-digit",
+                                  year: "numeric",
+                                })
+                              : "N/A";
                           const items = bill.items || [];
                           // Calculate total quantity of items
                           const totalItemQuantity = items.reduce((sum, item) => {
