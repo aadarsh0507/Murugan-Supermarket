@@ -87,6 +87,8 @@ services:
       - FRONTEND_URL=${FRONTEND_URL:-http://localhost:5173}
       # Bill timestamps + reports use this IANA zone for DATE(b.date) vs store calendar.
       - APP_TIMEZONE=${APP_TIMEZONE:-Asia/Kolkata}
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET:-}
       # Client DB (for app + daily backup). When running in Docker, use service name.
       - MYSQL_URL=mysql://root:${MYSQL_ROOT_PASSWORD:-StrongRoot@123}@db:3306/${MYSQL_DATABASE:-Super_Market}
       # Daily backup writes to client MySQL container's /backups (mysql_backups volume on db service)

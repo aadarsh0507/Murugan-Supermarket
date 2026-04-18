@@ -1450,7 +1450,7 @@ export default function Billing() {
       }
     };
 
-    // UPI: pay via Razorpay (your test credentials), then save bill with payment id as transaction ID
+    // UPI: pay via Razorpay (key from API uses server RAZORPAY_KEY_ID; live keys => live checkout)
     if (billToSave.paymentMethod === "upi") {
       try {
         const orderRes = await billsAPI.createRazorpayOrder(totals.total, `bill_${Date.now()}`);

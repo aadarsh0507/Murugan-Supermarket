@@ -86,6 +86,9 @@ services:
       - MYSQL_URL=${MYSQL_URL}
       - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
       - MYSQL_DATABASE=${MYSQL_DATABASE}
+      # Razorpay: must be rzp_live_* on production or checkout stays in Test Mode (not read from VITE_*).
+      - RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID}
+      - RAZORPAY_KEY_SECRET=${RAZORPAY_KEY_SECRET}
       # - MYSQL_MOB_APP_URL=${MYSQL_MOB_APP_URL}
       # - MYSQL_GLOBAL_URL=${MYSQL_GLOBAL_URL}
     env_file:
