@@ -1102,13 +1102,16 @@ export default function Items() {
             }
 
             for (const poItem of po.items) {
-              // Check for batch number in various field formats
-              const batchNumber = poItem.batchNumber || poItem.batch_number || poItem.batch || '';
-
-              // Only include items with batch numbers
-              if (!batchNumber || String(batchNumber).trim() === '') {
-                continue;
-              }
+              const batchNumberRaw = (
+                poItem.batchNumber ||
+                poItem.batch_number ||
+                poItem.batch ||
+                ''
+              ).trim();
+              const lineId = poItem._id || poItem.id || '';
+              const batchNumber =
+                batchNumberRaw ||
+                (lineId ? `LINE-${lineId}` : `PO-${po._id || po.id}-row`);
 
               const batchKey = `${(poItem.sku || poItem.itemSku || '').toString().trim()}-${String(batchNumber).trim()}-${String(po._id || po.id)}`;
 
@@ -1118,7 +1121,18 @@ export default function Items() {
                   itemName: poItem.itemName || poItem.name || poItem.particulars || '',
                   batchNumber: String(batchNumber).trim(),
                   batchQuantity: Number(poItem.quantity || poItem.poQty || 0),
-                  costPrice: Number(poItem.costPrice || poItem.price || poItem.cost || 0),
+                  costPrice: Number(
+                    poItem.costPrice ||
+                      poItem.cost_price ||
+                      poItem.price ||
+                      poItem.purchasePrice ||
+                      poItem.purchase_price ||
+                      poItem.cost ||
+                      0
+                  ),
+                  purchasePrice: Number(
+                    poItem.purchasePrice || poItem.purchase_price || poItem.costPrice || 0
+                  ),
                   expiryDate: poItem.expiryDate || poItem.expiry_date || null,
                   purchaseOrderId: String(po._id || po.id),
                   purchaseOrderNumber: po.poNumber || po.po_number || po.poNumber || '',

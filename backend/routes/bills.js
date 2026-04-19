@@ -2,6 +2,7 @@ import express from 'express';
 import { protect, requireScreen } from '../middleware/auth.js';
 import {
   createBill,
+  updateBill,
   deleteBill,
   getBills,
   getBill,
@@ -28,6 +29,13 @@ router.post(
   '/',
   createBillValidation,
   createBill
+);
+
+router.put(
+  '/:id',
+  billIdParamValidation,
+  createBillValidation,
+  updateBill
 );
 
 router.delete(

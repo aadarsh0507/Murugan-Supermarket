@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { motion } from "framer-motion";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Search, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard, ShoppingBag, RotateCcw, RefreshCw } from "lucide-react";
+import { Calendar, Download, TrendingUp, DollarSign, FileText, BarChart3, Users, Package, Truck, CheckCircle, Clock, XCircle, ArrowLeft, CreditCard, ShoppingBag, RotateCcw, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -25,7 +25,7 @@ import {
 import { MetricCard } from "@/components/MetricCard";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell } from "recharts";
 import { useToast } from "@/hooks/use-toast";
-import { billsAPI, usersAPI, purchaseOrdersAPI, suppliersAPI, itemsAPI, categoriesAPI, creditsAPI, customerCreditsAPI, ordersAPI } from "@/services/api";
+import { billsAPI, usersAPI, purchaseOrdersAPI, suppliersAPI, creditsAPI, customerCreditsAPI, ordersAPI } from "@/services/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { getErrorMessage, getErrorTitle } from "@/utils/errorMessages";
 
@@ -189,6 +189,32 @@ const formatUserDisplayName = (userItem) => {
   return fullName || userItem.fullName?.trim() || userItem.email || "Unnamed User";
 };
 
+const purchaseOrderLineTotal = (po) => Number(po?.totalAmount ?? po?.total ?? 0) || 0;
+
+const purchaseOrderSupplierLabel = (po) => {
+  if (!po) return "Unknown";
+  const fromNested = po.supplier?.companyName;
+  if (fromNested != null && String(fromNested).trim() !== "") return String(fromNested).trim();
+  const flat = po.supplierName ?? po.supplier_name;
+  if (flat != null && String(flat).trim() !== "") return String(flat).trim();
+  return "Unknown";
+};
+
+const purchaseOrderCreatorLabel = (po) => {
+  if (!po) return "Unknown";
+  if (po.createdByDisplayName != null && String(po.createdByDisplayName).trim() !== "") {
+    return String(po.createdByDisplayName).trim();
+  }
+  if (po.createdBy) return formatUserDisplayName(po.createdBy);
+  return "Unknown";
+};
+
+const purchaseOrderInvoiceNumber = (po) => {
+  const v = po?.invoiceNumber ?? po?.invoice_number;
+  if (v == null || String(v).trim() === "") return "—";
+  return String(v).trim();
+};
+
 const ORDERS_STATUS_COLORS = {
   pending: "bg-yellow-100 text-yellow-800 hover:bg-yellow-200",
   confirmed: "bg-blue-100 text-blue-800 hover:bg-blue-200",
@@ -224,15 +250,11 @@ export default function Reports() {
   const [stores, setStores] = useState([]);
   const [selectedStoreId, setSelectedStoreId] = useState("all");
   const [poReportData, setPoReportData] = useState(null);
-  const [poReportType, setPoReportType] = useState("monthly"); // "monthly", "daily", "supplierwise"
+  const [poReportType, setPoReportType] = useState("monthly"); // "monthly", "daily", "supplierwise", "storewise", "invoices"
   const [activeTab, setActiveTab] = useState("sales"); // "sales", "purchase", or "credits"
-  // PO sub-tab removed; use poReportType to switch between summary/daily/supplierwise/stock
   const [poViewMode, setPoViewMode] = useState("summary"); // "summary" or "detailed"
-  const [stockWithBatches, setStockWithBatches] = useState([]);
-  const [stockSearch, setStockSearch] = useState("");
-  const [stockLoading, setStockLoading] = useState(false);
-  const [categories, setCategories] = useState([]);
-  const [selectedCategoryId, setSelectedCategoryId] = useState("all");
+  /** Search PO #, supplier, or invoice number (server-side) when Invoice number report is selected */
+  const [invoiceReportSearch, setInvoiceReportSearch] = useState("");
 
   // Credit Collection Report States
   const [credits, setCredits] = useState([]);
@@ -274,15 +296,17 @@ export default function Reports() {
       const saved = JSON.parse(localStorage.getItem('reports_filters') || '{}');
       if (saved.activeTab && !fromOrdersLink) setActiveTab(saved.activeTab);
       if (saved.reportType) setReportType(saved.reportType);
-      if (saved.poReportType) setPoReportType(saved.poReportType);
+      if (saved.poReportType) {
+        setPoReportType(saved.poReportType === "stock" ? "invoices" : saved.poReportType);
+      }
       if (saved.poViewMode) setPoViewMode(saved.poViewMode);
       if (saved.dateFrom) setDateFrom(normalizeReportDateInput(saved.dateFrom) || saved.dateFrom);
       if (saved.dateTo) setDateTo(normalizeReportDateInput(saved.dateTo) || saved.dateTo);
       if (saved.selectedUserId) setSelectedUserId(saved.selectedUserId);
       if (saved.selectedSupplierId) setSelectedSupplierId(saved.selectedSupplierId);
       if (saved.selectedStoreId) setSelectedStoreId(saved.selectedStoreId);
-      if (saved.selectedCategoryId) setSelectedCategoryId(saved.selectedCategoryId);
-      if (saved.stockSearch) setStockSearch(saved.stockSearch);
+      if (saved.invoiceReportSearch) setInvoiceReportSearch(saved.invoiceReportSearch);
+      else if (saved.stockSearch) setInvoiceReportSearch(saved.stockSearch);
       if (saved.selectedCreditSupplierId) setSelectedCreditSupplierId(saved.selectedCreditSupplierId);
       if (saved.creditStatusFilter) setCreditStatusFilter(saved.creditStatusFilter);
       if (saved.creditViewMode) setCreditViewMode(saved.creditViewMode);
@@ -297,7 +321,6 @@ export default function Reports() {
     loadUsers();
     loadSuppliers();
     loadStores();
-    loadCategories();
     // Report data will be loaded by the useEffect when selectedStore is available
     if (activeTab === "purchase") {
       loadPOReportData();
@@ -325,8 +348,7 @@ export default function Reports() {
       selectedUserId,
       selectedSupplierId,
       selectedStoreId,
-      selectedCategoryId,
-      stockSearch,
+      invoiceReportSearch,
       selectedCreditSupplierId,
       creditStatusFilter,
       creditViewMode,
@@ -335,7 +357,7 @@ export default function Reports() {
       returnsStatusFilter,
     };
     localStorage.setItem('reports_filters', JSON.stringify(toSave));
-  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, selectedCategoryId, stockSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
+  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, invoiceReportSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
 
   // Store for reports: header picker first, then profile/JWT store (sidebar can show "Select Store" while user still has a default store)
   const storeIdForEffect =
@@ -367,11 +389,7 @@ export default function Reports() {
 
   useEffect(() => {
     if (activeTab === "purchase") {
-      if (poReportType === "stock" || poReportType === "storewise") {
-        loadStockWithBatches();
-      } else {
-        loadPOReportData();
-      }
+      loadPOReportData();
     }
     if (activeTab === "credits") {
       loadCreditReportData();
@@ -382,7 +400,7 @@ export default function Reports() {
     if (activeTab === "returns") {
       loadReturnsReportData();
     }
-  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, stockSearch, selectedCategoryId, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter, storeIdForEffect, user]);
+  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, invoiceReportSearch, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter, storeIdForEffect, user]);
 
   const loadUsers = async () => {
     try {
@@ -410,18 +428,6 @@ export default function Reports() {
       setStores(storesData);
     } catch (error) {
       console.error("Error loading stores:", error);
-    }
-  };
-
-  const loadCategories = async () => {
-    try {
-      const response = await categoriesAPI.getCategories({
-        includeSubcategories: true,
-        limit: 100
-      });
-      setCategories(response.data?.categories || []);
-    } catch (error) {
-      console.error("Error loading categories:", error);
     }
   };
 
@@ -678,6 +684,9 @@ export default function Reports() {
       if (selectedStoreId && selectedStoreId !== "all") {
         params.storeId = selectedStoreId;
       }
+      if (poReportType === "invoices" && invoiceReportSearch.trim()) {
+        params.search = invoiceReportSearch.trim();
+      }
 
       const response = await purchaseOrdersAPI.getPurchaseOrders(params);
       const poData = response.data?.purchaseOrders || [];
@@ -694,36 +703,6 @@ export default function Reports() {
       });
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadStockWithBatches = async () => {
-    setStockLoading(true);
-    try {
-      const params = {};
-      if (stockSearch) {
-        params.search = stockSearch;
-      }
-      if (selectedCategoryId && selectedCategoryId !== "all") {
-        params.categoryId = selectedCategoryId;
-      }
-      // Add store filter when a store is selected
-      if (selectedStoreId && selectedStoreId !== "all") {
-        params.storeId = selectedStoreId;
-      }
-
-      const response = await itemsAPI.getStockWithBatches(params);
-      const stockData = response.data || [];
-      setStockWithBatches(stockData);
-    } catch (error) {
-      console.error("Error loading stock with batches:", error);
-      toast({
-        title: getErrorTitle(error),
-        description: getErrorMessage(error, "Failed to load stock with batch data", "stock with batch data"),
-        variant: "destructive",
-      });
-    } finally {
-      setStockLoading(false);
     }
   };
 
@@ -753,19 +732,19 @@ export default function Reports() {
         acc[po.status] = { count: 0, value: 0, items: 0 };
       }
       acc[po.status].count += 1;
-      acc[po.status].value += po.total || 0;
+      acc[po.status].value += purchaseOrderLineTotal(po);
       acc[po.status].items += po.totalQuantity || 0;
       return acc;
     }, {});
 
     // Process by supplier
     const supplierData = pos.reduce((acc, po) => {
-      const supplierName = po.supplier?.companyName || 'Unknown';
+      const supplierName = purchaseOrderSupplierLabel(po);
       if (!acc[supplierName]) {
         acc[supplierName] = { supplier: supplierName, pos: 0, value: 0, items: 0 };
       }
       acc[supplierName].pos += 1;
-      acc[supplierName].value += po.total || 0;
+      acc[supplierName].value += purchaseOrderLineTotal(po);
       acc[supplierName].items += po.totalQuantity || 0;
       return acc;
     }, {});
@@ -786,7 +765,7 @@ export default function Reports() {
         }
 
         acc[monthKey].pos += 1;
-        acc[monthKey].value += po.total || 0;
+        acc[monthKey].value += purchaseOrderLineTotal(po);
         acc[monthKey].items += po.totalQuantity || 0;
 
         return acc;
@@ -809,7 +788,7 @@ export default function Reports() {
         }
 
         acc[dayKey].pos += 1;
-        acc[dayKey].value += po.total || 0;
+        acc[dayKey].value += purchaseOrderLineTotal(po);
         acc[dayKey].items += po.totalQuantity || 0;
 
         return acc;
@@ -835,7 +814,7 @@ export default function Reports() {
           storeAgg[storeName] = { store: storeName, pos: 0, value: 0, items: 0 };
         }
         storeAgg[storeName].pos += 1;
-        storeAgg[storeName].value += po.total || 0;
+        storeAgg[storeName].value += purchaseOrderLineTotal(po);
         storeAgg[storeName].items += po.totalQuantity || 0;
 
         if (!storeItemsMap[storeId]) storeItemsMap[storeId] = {};
@@ -854,9 +833,12 @@ export default function Reports() {
       });
       chartData = Object.values(storeAgg).sort((a, b) => b.value - a.value);
       tableData = Object.values(storeAgg).sort((a, b) => b.value - a.value);
+    } else if (type === "invoices") {
+      chartData = [];
+      tableData = [];
     }
 
-    const totalValue = pos.reduce((sum, po) => sum + (po.total || 0), 0);
+    const totalValue = pos.reduce((sum, po) => sum + purchaseOrderLineTotal(po), 0);
     const totalItems = pos.reduce((sum, po) => sum + (po.totalQuantity || 0), 0);
     const averagePOValue = pos.length > 0 ? totalValue / pos.length : 0;
 
@@ -1395,38 +1377,37 @@ export default function Reports() {
     }
 
     if (activeTab === "purchase") {
-      if (poReportType === "stock" && stockWithBatches.length > 0) {
+      if (poReportType === "invoices") {
         const columns = [
-          "Item Name",
-          "SKU",
-          "Category",
-          "Subcategory",
-          "Batch Number",
-          "Quantity",
           "PO Number",
-          "Purchase Order Date"
+          "Invoice number",
+          "Supplier",
+          "Order Date",
+          "Status",
+          "Items",
+          "Total Value (₹)",
         ];
-        const rows = stockWithBatches.map((item) => ({
-          "Item Name": item.itemName || "",
-          "SKU": item.sku || "",
-          "Category": item.category || "",
-          "Subcategory": item.subcategory || "",
-          "Batch Number": item.batchNumber || "",
-          "Quantity": item.quantity ?? 0,
-          "PO Number": item.purchaseOrderNumber || "",
-          "Purchase Order Date": formatDateValue(item.purchaseOrderDate)
+        const rows = purchaseOrders.map((po) => ({
+          "PO Number": po.poNumber || "",
+          "Invoice number": purchaseOrderInvoiceNumber(po),
+          Supplier: purchaseOrderSupplierLabel(po),
+          "Order Date": formatDateValue(po.orderDate),
+          Status: (po.status || "").replace(/_/g, " "),
+          Items: po.totalQuantity ?? 0,
+          "Total Value (₹)": purchaseOrderLineTotal(po).toFixed(2),
         }));
         return {
-          title: "Stock with Batches",
-          filename: `purchase-stock-${today}`,
+          title: "Purchase invoice numbers",
+          filename: `purchase-invoices-${today}`,
           columns,
-          rows
+          rows,
         };
       }
 
       if (poViewMode === "detailed" && poReportData?.rawData?.length) {
         const columns = [
           "PO Number",
+          "Invoice number",
           "Supplier",
           "Order Date",
           "Status",
@@ -1436,14 +1417,13 @@ export default function Reports() {
         ];
         const rows = poReportData.rawData.map((po) => ({
           "PO Number": po.poNumber || "",
-          "Supplier": po.supplier?.companyName || "Unknown",
+          "Invoice number": purchaseOrderInvoiceNumber(po),
+          "Supplier": purchaseOrderSupplierLabel(po),
           "Order Date": formatDateValue(po.orderDate),
           "Status": (po.status || "").replace(/_/g, " "),
           "Items": po.totalQuantity ?? 0,
-          "Total Value (₹)": Number(po.total ?? 0).toFixed(2),
-          "Created By": po.createdBy?.firstName
-            ? `${po.createdBy.firstName} ${po.createdBy.lastName ?? ""}`.trim()
-            : "Unknown"
+          "Total Value (₹)": purchaseOrderLineTotal(po).toFixed(2),
+          "Created By": purchaseOrderCreatorLabel(po),
         }));
         return {
           title: "Detailed Purchase Orders",
@@ -1897,23 +1877,25 @@ export default function Reports() {
                           <SelectItem value="daily">Daily Report</SelectItem>
                           <SelectItem value="supplierwise">Supplier-wise Report</SelectItem>
                           <SelectItem value="storewise">Store-wise Report</SelectItem>
-                          <SelectItem value="stock">Stock with Batches</SelectItem>
+                          <SelectItem value="invoices">Invoice number report</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="poViewMode">View</Label>
-                      <Select value={poViewMode} onValueChange={setPoViewMode}>
-                        <SelectTrigger id="poViewMode">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="summary">Summary</SelectItem>
-                          <SelectItem value="detailed">Detailed</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                    {poReportType !== "invoices" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="poViewMode">View</Label>
+                        <Select value={poViewMode} onValueChange={setPoViewMode}>
+                          <SelectTrigger id="poViewMode">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="summary">Summary</SelectItem>
+                            <SelectItem value="detailed">Detailed</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )}
 
                     <div className="space-y-2">
                       <Label htmlFor="poDateFrom">From Date</Label>
@@ -1967,34 +1949,16 @@ export default function Reports() {
                         </SelectContent>
                       </Select>
                     </div>
-                    {poReportType === "stock" && (
-                      <>
-                        <div className="space-y-2">
-                          <Label htmlFor="stockCategory">Category</Label>
-                          <Select value={selectedCategoryId} onValueChange={setSelectedCategoryId}>
-                            <SelectTrigger id="stockCategory">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="all">All Categories</SelectItem>
-                              {categories.map((category) => (
-                                <SelectItem key={category._id} value={category._id}>
-                                  {category.name}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-2">
-                          <Label htmlFor="stockSearch">Search</Label>
-                          <Input
-                            id="stockSearch"
-                            placeholder="Search by item name or SKU..."
-                            value={stockSearch}
-                            onChange={(e) => setStockSearch(e.target.value)}
-                          />
-                        </div>
-                      </>
+                    {poReportType === "invoices" && (
+                      <div className="space-y-2">
+                        <Label htmlFor="invoiceReportSearch">Search</Label>
+                        <Input
+                          id="invoiceReportSearch"
+                          placeholder="PO #, supplier, or invoice number…"
+                          value={invoiceReportSearch}
+                          onChange={(e) => setInvoiceReportSearch(e.target.value)}
+                        />
+                      </div>
                     )}
                   </>
                 ) : activeTab === "credits" ? (
@@ -2670,7 +2634,7 @@ export default function Reports() {
       )}
 
       {/* Purchase Order Reports */}
-      {activeTab === "purchase" && poReportType !== "stock" && poReportData && (
+      {activeTab === "purchase" && poReportData && (
         <>
           {/* Summary Metrics - Always show */}
           <div className="grid md:grid-cols-4 gap-4 md:gap-6">
@@ -2720,6 +2684,63 @@ export default function Reports() {
               delay={0.7}
             />
           </div>
+
+          {poReportType === "invoices" && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.35 }}
+            >
+              <Card>
+                <CardHeader>
+                  <CardTitle className="flex items-center gap-2">
+                    <FileText className="h-5 w-5" />
+                    Invoice number report
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {poReportData.rawData && poReportData.rawData.length > 0 ? (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead className="w-12">S.No</TableHead>
+                            <TableHead>PO Number</TableHead>
+                            <TableHead>Invoice number</TableHead>
+                            <TableHead>Supplier</TableHead>
+                            <TableHead>Order Date</TableHead>
+                            <TableHead>Status</TableHead>
+                            <TableHead className="text-right">Items</TableHead>
+                            <TableHead className="text-right">Total (₹)</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {poReportData.rawData.map((po, index) => (
+                            <TableRow key={po._id || index}>
+                              <TableCell className="text-center">{index + 1}</TableCell>
+                              <TableCell className="font-medium">{po.poNumber}</TableCell>
+                              <TableCell>{purchaseOrderInvoiceNumber(po)}</TableCell>
+                              <TableCell>{purchaseOrderSupplierLabel(po)}</TableCell>
+                              <TableCell>{new Date(po.orderDate).toLocaleDateString()}</TableCell>
+                              <TableCell>{getStatusBadge(po.status)}</TableCell>
+                              <TableCell className="text-right">{po.totalQuantity || 0}</TableCell>
+                              <TableCell className="text-right">
+                                ₹{purchaseOrderLineTotal(po).toFixed(2)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    <div className="text-center py-10 text-muted-foreground">
+                      No purchase orders match the current filters.
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
 
           {/* Summary View - Charts and Summary Table */}
           {poViewMode === "summary" && poReportData.chartData.length > 0 && (
@@ -2870,81 +2891,14 @@ export default function Reports() {
                 </CardContent>
               </Card>
 
-              {poReportType === "storewise" && selectedStoreId !== "all" && stockWithBatches.length > 0 && (
-                <Card className="mt-4">
-                  <CardHeader>
-                    <CardTitle>Items with Batches available for selected store</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="overflow-x-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="w-12">S.No</TableHead>
-                            <TableHead>Item Name</TableHead>
-                            <TableHead>SKU</TableHead>
-                            <TableHead>Category</TableHead>
-                            <TableHead>Subcategory</TableHead>
-                            <TableHead>Batch Number</TableHead>
-                            <TableHead className="text-right">Quantity</TableHead>
-                            <TableHead>PO Number</TableHead>
-                            <TableHead>Purchase Order Date</TableHead>
-                            <TableHead className="text-right">Cost Price (₹)</TableHead>
-                            <TableHead>HSN Number</TableHead>
-                            <TableHead>Expiry Date</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {stockWithBatches.map((stock, index) => (
-                            <TableRow key={`${stock.sku}-${stock.batchNumber}-${index}`}>
-                              <TableCell className="text-center">{index + 1}</TableCell>
-                              <TableCell className="font-medium">{stock.itemName}</TableCell>
-                              <TableCell>{stock.sku}</TableCell>
-                              <TableCell>{stock.categoryName}</TableCell>
-                              <TableCell>{stock.subcategoryName}</TableCell>
-                              <TableCell>{stock.batchNumber}</TableCell>
-                              <TableCell className="text-right">{stock.batchQuantity}</TableCell>
-                              <TableCell>{stock.purchaseOrderNumber}</TableCell>
-                              <TableCell>
-                                {stock.purchaseDate
-                                  ? new Date(stock.purchaseDate).toLocaleDateString()
-                                  : 'N/A'}
-                              </TableCell>
-                              <TableCell className="text-right">₹{stock.costPrice.toFixed(2)}</TableCell>
-                              <TableCell>{stock.hsnNumber}</TableCell>
-                              <TableCell>
-                                {stock.expiryDate
-                                  ? new Date(stock.expiryDate).toLocaleDateString('en-GB', {
-                                    day: '2-digit',
-                                    month: '2-digit',
-                                    year: 'numeric'
-                                  })
-                                  : 'N/A'}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
-              {poReportType === "storewise" && selectedStoreId !== "all" && stockWithBatches.length === 0 && !stockLoading && (
-                <Card className="mt-4">
-                  <CardContent className="pt-6">
-                    <div className="text-center py-12">
-                      <Package className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                      <h3 className="text-lg font-semibold mb-2">No items available for this store</h3>
-                      <p className="text-muted-foreground">No batches found for the selected store</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              )}
             </motion.div>
           )}
 
           {/* Detailed View - Detailed PO Table */}
-          {poViewMode === "detailed" && poReportData.rawData && poReportData.rawData.length > 0 && (
+          {poReportType !== "invoices" &&
+            poViewMode === "detailed" &&
+            poReportData.rawData &&
+            poReportData.rawData.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
@@ -2961,6 +2915,7 @@ export default function Reports() {
                         <TableRow>
                           <TableHead className="w-12">S.No</TableHead>
                           <TableHead>PO Number</TableHead>
+                          <TableHead>Invoice number</TableHead>
                           <TableHead>Supplier</TableHead>
                           <TableHead>Order Date</TableHead>
                           <TableHead>Status</TableHead>
@@ -2974,12 +2929,13 @@ export default function Reports() {
                           <TableRow key={po._id || index}>
                             <TableCell className="text-center">{index + 1}</TableCell>
                             <TableCell className="font-medium">{po.poNumber}</TableCell>
-                            <TableCell>{po.supplier?.companyName || 'Unknown'}</TableCell>
+                            <TableCell>{purchaseOrderInvoiceNumber(po)}</TableCell>
+                            <TableCell>{purchaseOrderSupplierLabel(po)}</TableCell>
                             <TableCell>{new Date(po.orderDate).toLocaleDateString()}</TableCell>
                             <TableCell>{getStatusBadge(po.status)}</TableCell>
                             <TableCell className="text-right">{po.totalQuantity || 0}</TableCell>
-                            <TableCell className="text-right">₹{(po.total || 0).toFixed(2)}</TableCell>
-                            <TableCell>{po.createdBy?.firstName ? `${po.createdBy.firstName} ${po.createdBy.lastName}` : 'Unknown'}</TableCell>
+                            <TableCell className="text-right">₹{purchaseOrderLineTotal(po).toFixed(2)}</TableCell>
+                            <TableCell>{purchaseOrderCreatorLabel(po)}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -2992,107 +2948,13 @@ export default function Reports() {
         </>
       )}
 
-      {/* Stock with Batch Numbers Report */}
-      {activeTab === "purchase" && poReportType === "stock" && (
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.1 }}
-        >
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-2">
-                  <Package className="h-5 w-5" />
-                  Stock with Batch Numbers
-                </CardTitle>
-                <div className="flex items-center gap-2">
-                  <Input
-                    placeholder="Search by item name or SKU..."
-                    value={stockSearch}
-                    onChange={(e) => setStockSearch(e.target.value)}
-                    className="w-64"
-                  />
-                  <Search className="h-4 w-4 text-muted-foreground" />
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {stockLoading ? (
-                <div className="text-center py-12">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
-                  <p className="text-gray-600 mt-2">Loading stock data...</p>
-                </div>
-              ) : stockWithBatches.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="w-12">S.No</TableHead>
-                        <TableHead>Item Name</TableHead>
-                        <TableHead>SKU</TableHead>
-                        <TableHead>Category</TableHead>
-                        <TableHead>Subcategory</TableHead>
-                        <TableHead>Batch Number</TableHead>
-                        <TableHead className="text-right">Quantity</TableHead>
-                        <TableHead>PO Number</TableHead>
-                        <TableHead>Purchase Order Date</TableHead>
-                        <TableHead className="text-right">Cost Price (₹)</TableHead>
-                        <TableHead>HSN Number</TableHead>
-                        <TableHead>Expiry Date</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {stockWithBatches.map((stock, index) => (
-                        <TableRow key={`${stock.sku}-${stock.batchNumber}-${index}`}>
-                          <TableCell className="text-center">{index + 1}</TableCell>
-                          <TableCell className="font-medium">{stock.itemName}</TableCell>
-                          <TableCell>{stock.sku}</TableCell>
-                          <TableCell>{stock.categoryName}</TableCell>
-                          <TableCell>{stock.subcategoryName}</TableCell>
-                          <TableCell>{stock.batchNumber}</TableCell>
-                          <TableCell className="text-right">{stock.batchQuantity}</TableCell>
-                          <TableCell>{stock.purchaseOrderNumber}</TableCell>
-                          <TableCell>
-                            {stock.purchaseDate
-                              ? new Date(stock.purchaseDate).toLocaleDateString()
-                              : 'N/A'}
-                          </TableCell>
-                          <TableCell className="text-right">₹{stock.costPrice.toFixed(2)}</TableCell>
-                          <TableCell>{stock.hsnNumber}</TableCell>
-                          <TableCell>
-                            {stock.expiryDate
-                              ? new Date(stock.expiryDate).toLocaleDateString('en-GB', {
-                                day: '2-digit',
-                                month: '2-digit',
-                                year: 'numeric'
-                              })
-                              : 'N/A'}
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : (
-                <div className="text-center py-12">
-                  <Package className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">No stock data available</h3>
-                  <p className="text-muted-foreground">Try adjusting your search to see data</p>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </motion.div>
-      )}
-
       {loading && activeTab === "sales" && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
           <p className="text-gray-600 mt-2">Loading sales data...</p>
         </div>
       )}
-      {loading && activeTab === "purchase" && poReportType !== "stock" && (
+      {loading && activeTab === "purchase" && (
         <div className="text-center py-12">
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
           <p className="text-gray-600 mt-2">Loading purchase order data...</p>
@@ -3114,7 +2976,7 @@ export default function Reports() {
         </div>
       )}
 
-      {!loading && activeTab === "purchase" && poReportType !== "stock" && !poReportData && (
+      {!loading && activeTab === "purchase" && !poReportData && (
         <div className="text-center py-12">
           <Truck className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
           <h3 className="text-lg font-semibold mb-2">No purchase order data available</h3>

@@ -91,6 +91,47 @@ const extractStoreIdsFromSupplier = (supplier) => {
   return [];
 };
 
+/** Tab order for Add/Edit supplier form — Enter moves to the next focusable field. */
+const SUPPLIER_FORM_FIELD_IDS = [
+  "companyName",
+  "email",
+  "firstName",
+  "lastName",
+  "designation",
+  "primaryPhone",
+  "secondaryPhone",
+  "street",
+  "city",
+  "state",
+  "zipCode",
+  "gstNumber",
+  "panNumber",
+  "accountNumber",
+  "bankName",
+  "branch",
+  "ifscCode",
+  "creditLimit",
+  "paymentTerms",
+  "notes",
+];
+
+const focusNextSupplierFormField = (currentId) => {
+  const i = SUPPLIER_FORM_FIELD_IDS.indexOf(currentId);
+  if (i < 0) return;
+  if (i >= SUPPLIER_FORM_FIELD_IDS.length - 1) {
+    document.getElementById("supplierFormSubmit")?.focus();
+    return;
+  }
+  document.getElementById(SUPPLIER_FORM_FIELD_IDS[i + 1])?.focus();
+};
+
+const supplierFieldEnterKeyDown = (e, fieldId) => {
+  if (e.key !== "Enter") return;
+  if (e.nativeEvent?.isComposing) return;
+  e.preventDefault();
+  focusNextSupplierFormField(fieldId);
+};
+
 const Suppliers = () => {
   const { toast } = useToast();
   const { selectedStore } = useAuth();
@@ -567,6 +608,7 @@ const Suppliers = () => {
                       id="companyName"
                       value={formData.companyName}
                       onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "companyName")}
                       required
                     />
                   </div>
@@ -577,6 +619,7 @@ const Suppliers = () => {
                       type="email"
                       value={formData.email}
                       onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "email")}
                     />
                   </div>
                 </div>
@@ -598,6 +641,7 @@ const Suppliers = () => {
                         ...formData,
                         contactPerson: { ...formData.contactPerson, firstName: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "firstName")}
                     />
                   </div>
                   <div>
@@ -609,6 +653,7 @@ const Suppliers = () => {
                         ...formData,
                         contactPerson: { ...formData.contactPerson, lastName: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "lastName")}
                     />
                   </div>
                   <div>
@@ -620,6 +665,7 @@ const Suppliers = () => {
                         ...formData,
                         contactPerson: { ...formData.contactPerson, designation: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "designation")}
                     />
                   </div>
                 </div>
@@ -641,6 +687,7 @@ const Suppliers = () => {
                         ...formData,
                         phone: { ...formData.phone, primary: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "primaryPhone")}
                       placeholder="e.g., 9876543210"
                       required
                     />
@@ -657,6 +704,7 @@ const Suppliers = () => {
                         ...formData,
                         phone: { ...formData.phone, secondary: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "secondaryPhone")}
                       placeholder="Optional"
                     />
                   </div>
@@ -679,6 +727,7 @@ const Suppliers = () => {
                         ...formData,
                         address: { ...formData.address, street: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "street")}
                     />
                   </div>
                   <div>
@@ -690,6 +739,7 @@ const Suppliers = () => {
                         ...formData,
                         address: { ...formData.address, city: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "city")}
                     />
                   </div>
                   <div>
@@ -701,6 +751,7 @@ const Suppliers = () => {
                         ...formData,
                         address: { ...formData.address, state: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "state")}
                     />
                   </div>
                   <div>
@@ -712,6 +763,7 @@ const Suppliers = () => {
                         ...formData,
                         address: { ...formData.address, zipCode: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "zipCode")}
                     />
                   </div>
                 </div>
@@ -727,6 +779,7 @@ const Suppliers = () => {
                       id="gstNumber"
                       value={formData.gstNumber}
                       onChange={(e) => setFormData({ ...formData, gstNumber: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "gstNumber")}
                     />
                   </div>
                   <div>
@@ -735,6 +788,7 @@ const Suppliers = () => {
                       id="panNumber"
                       value={formData.panNumber}
                       onChange={(e) => setFormData({ ...formData, panNumber: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "panNumber")}
                     />
                   </div>
                 </div>
@@ -753,6 +807,7 @@ const Suppliers = () => {
                         ...formData,
                         bankDetails: { ...formData.bankDetails, accountNumber: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "accountNumber")}
                     />
                   </div>
                   <div>
@@ -764,6 +819,7 @@ const Suppliers = () => {
                         ...formData,
                         bankDetails: { ...formData.bankDetails, bankName: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "bankName")}
                     />
                   </div>
                   <div>
@@ -775,6 +831,7 @@ const Suppliers = () => {
                         ...formData,
                         bankDetails: { ...formData.bankDetails, branch: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "branch")}
                     />
                   </div>
                   <div>
@@ -786,6 +843,7 @@ const Suppliers = () => {
                         ...formData,
                         bankDetails: { ...formData.bankDetails, ifscCode: e.target.value }
                       })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "ifscCode")}
                     />
                   </div>
                 </div>
@@ -802,6 +860,7 @@ const Suppliers = () => {
                       type="number"
                       value={formData.creditLimit}
                       onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "creditLimit")}
                     />
                   </div>
                   <div>
@@ -810,6 +869,7 @@ const Suppliers = () => {
                       id="paymentTerms"
                       value={formData.paymentTerms}
                       onChange={(e) => setFormData({ ...formData, paymentTerms: e.target.value })}
+                      onKeyDown={(e) => supplierFieldEnterKeyDown(e, "paymentTerms")}
                       placeholder="e.g., Net 30"
                     />
                   </div>
@@ -821,6 +881,14 @@ const Suppliers = () => {
                     className="w-full min-h-[100px] rounded-md border border-input bg-background px-3 py-2 text-sm"
                     value={formData.notes}
                     onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && e.shiftKey) return;
+                      if (e.key === "Enter") {
+                        if (e.nativeEvent?.isComposing) return;
+                        e.preventDefault();
+                        focusNextSupplierFormField("notes");
+                      }
+                    }}
                     placeholder="Additional notes..."
                   />
                 </div>
@@ -885,7 +953,7 @@ const Suppliers = () => {
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={saving}>
+                <Button id="supplierFormSubmit" type="submit" disabled={saving}>
                   {saving ? "Saving..." : editingSupplier ? "Update Supplier" : "Create Supplier"}
                 </Button>
               </div>

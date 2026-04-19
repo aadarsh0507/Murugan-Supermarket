@@ -1,6 +1,7 @@
 import { body, param, validationResult } from 'express-validator';
 import {
   createBill as createBillRepo,
+  updateBill as updateBillRepo,
   deleteBill as deleteBillRepo,
   getBillById as getBillByIdRepo,
   getBillByBillNo as getBillByBillNoRepo,
@@ -9,7 +10,8 @@ import {
 } from '../repositories/billRepository.js';
 import {
   upsertCustomerByPhone as upsertCustomerRepo,
-  getCustomerByPhone as getCustomerMasterByPhoneRepo
+  getCustomerByPhone as getCustomerMasterByPhoneRepo,
+  customerRowToDto
 } from '../repositories/customerRepository.js';
 import { resolveBillMysqlDatetime } from '../utils/businessWallClock.js';
 
@@ -48,8 +50,11 @@ export const createBillValidation = [
     .withMessage('Each itemName must be between 1 and 200 characters'),
   body('items.*.quantity')
     .optional()
-    .isInt({ min: 1 })
-    .withMessage('Item quantity must be a positive integer'),
+    .custom((value) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0;
+    })
+    .withMessage('Item quantity must be a positive number'),
   body('items.*.unitPrice')
     .optional()
     .isFloat({ min: 0 })
@@ -378,6 +383,185 @@ export const createBill = async (req, res) => {
   }
 };
 
+export const updateBill = async (req, res) => {
+  try {
+    if (respondValidationErrors(req, res)) return;
+
+    const billId = Number(req.params.id);
+    const {
+      storeId,
+      customerId,
+      customerName,
+      customerPhone,
+      customerEmail,
+      customerAddress,
+      customerGstin,
+      paymentMethod,
+      paymentStatus,
+      transactionId,
+      subtotal,
+      tax,
+      discount,
+      total,
+      items
+    } = req.body;
+
+    const resolvedStoreId = Number(storeId || req.user?.selectedStore?.id);
+    if (!resolvedStoreId) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'A store must be selected before updating a bill.'
+      });
+    }
+
+    const existing = await getBillByIdRepo(billId, { includeItems: false });
+    if (!existing) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bill not found'
+      });
+    }
+    if (Number(existing.storeId) !== Number(resolvedStoreId)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'This bill belongs to a different store.'
+      });
+    }
+
+    const payload = {
+      storeId: resolvedStoreId,
+      customerId,
+      customerName,
+      customerPhone,
+      customerEmail,
+      customerAddress,
+      customerGstin,
+      paymentMethod,
+      paymentStatus,
+      transactionId,
+      subtotal,
+      tax,
+      discount,
+      total,
+      items
+    };
+
+    const trimmedCustomerName =
+      payload.customerName !== undefined && payload.customerName !== null
+        ? String(payload.customerName).trim()
+        : '';
+    const trimmedCustomerPhone =
+      payload.customerPhone !== undefined && payload.customerPhone !== null
+        ? String(payload.customerPhone).trim()
+        : '';
+    const trimmedCustomerEmail =
+      payload.customerEmail !== undefined && payload.customerEmail !== null
+        ? String(payload.customerEmail).trim()
+        : '';
+    const trimmedCustomerAddress =
+      payload.customerAddress !== undefined && payload.customerAddress !== null
+        ? String(payload.customerAddress).trim()
+        : '';
+    const trimmedCustomerGstin =
+      payload.customerGstin !== undefined && payload.customerGstin !== null
+        ? String(payload.customerGstin).trim().toUpperCase()
+        : '';
+
+    payload.customerName = trimmedCustomerName || null;
+    payload.customerPhone = trimmedCustomerPhone || null;
+    payload.customerEmail = trimmedCustomerEmail || null;
+    payload.customerAddress = trimmedCustomerAddress || null;
+    payload.customerGstin = trimmedCustomerGstin || null;
+    payload.transactionId = transactionId?.trim() || null;
+
+    if (payload.paymentMethod === 'online') {
+      if (!payload.transactionId || payload.transactionId.length === 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Transaction ID is required for online payments.'
+        });
+      }
+    }
+
+    if (payload.paymentMethod === 'credit') {
+      if (!payload.customerPhone || !/^[\+]?[0-9]{6,20}$/.test(payload.customerPhone)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'A valid customer phone number is required for credit payments.'
+        });
+      }
+
+      if (!payload.customerName || payload.customerName.length === 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Customer name is required for credit payments.'
+        });
+      }
+
+      payload.paymentStatus = 'pending';
+      payload.customerId = payload.customerId ?? payload.customerPhone;
+    } else {
+      payload.paymentStatus = payload.paymentStatus || 'paid';
+    }
+
+    const bill = await updateBillRepo(billId, {
+      storeId: resolvedStoreId,
+      customerId: payload.customerId,
+      customerName: payload.customerName,
+      customerPhone: payload.customerPhone,
+      customerEmail: payload.customerEmail,
+      customerAddress: payload.customerAddress,
+      customerGstin: payload.customerGstin,
+      paymentMethod: payload.paymentMethod,
+      paymentStatus: payload.paymentStatus,
+      transactionId: payload.transactionId,
+      subtotal: payload.subtotal,
+      tax: payload.tax,
+      discount: payload.discount,
+      total: payload.total,
+      items: payload.items
+    });
+
+    try {
+      if (payload.customerPhone) {
+        await upsertCustomerRepo({
+          storeId: resolvedStoreId || null,
+          name: payload.customerName || null,
+          phone: payload.customerPhone,
+          email: payload.customerEmail || null,
+          address: payload.customerAddress || null,
+          gstin: payload.customerGstin || null,
+          lastPurchaseAt: bill?.date || new Date()
+        });
+      }
+    } catch (e) {
+      console.warn('Customer upsert failed (non-fatal):', e?.message || e);
+    }
+
+    res.json({
+      status: 'success',
+      message: 'Bill updated successfully',
+      data: { bill }
+    });
+  } catch (error) {
+    console.error('Update bill error:', error);
+    const msg = error?.message || '';
+    if (msg === 'Bill not found' || msg === 'Bill not found after update') {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Bill not found'
+      });
+    }
+    if (msg.includes('Bill does not belong') || msg.includes('Bill store mismatch')) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'This bill belongs to a different store.'
+      });
+    }
+    handleDatabaseError(error, res);
+  }
+};
+
 export const deleteBill = async (req, res) => {
   try {
     if (respondValidationErrors(req, res)) return;
@@ -464,22 +648,42 @@ export const getCustomerByPhone = async (req, res) => {
       });
     }
 
-    // Fetch customer regardless of store - customers are shared across stores
-    // Prefer master customers table, fall back to last bill if not present
-    let customer = await getCustomerMasterByPhoneRepo(phone, null);
+    const rawStoreId = req.query.storeId;
+    const storeId =
+      rawStoreId !== undefined && rawStoreId !== null && String(rawStoreId).trim() !== ''
+        ? Number.parseInt(String(rawStoreId), 10)
+        : null;
+    const resolvedStoreId = Number.isFinite(storeId) && storeId > 0 ? storeId : null;
+
+    // Prefer customers row for this store, then any store, then last bill snapshot, then create master row
+    let customer = resolvedStoreId
+      ? await getCustomerMasterByPhoneRepo(phone, resolvedStoreId)
+      : null;
     if (!customer) {
-      customer = await findLatestCustomerByPhoneRepo(phone, null);
+      customer = await getCustomerMasterByPhoneRepo(phone, null);
     }
     if (!customer) {
-      return res.status(404).json({
-        status: 'error',
-        message: 'Customer not found'
+      customer = await findLatestCustomerByPhoneRepo(phone, resolvedStoreId);
+    }
+
+    let isNew = false;
+    if (!customer) {
+      const row = await upsertCustomerRepo({
+        storeId: resolvedStoreId,
+        name: null,
+        phone,
+        email: null,
+        address: null,
+        gstin: null,
+        lastPurchaseAt: null
       });
+      customer = customerRowToDto(row);
+      isNew = true;
     }
 
     res.json({
       status: 'success',
-      data: { customer }
+      data: { customer, isNew }
     });
   } catch (error) {
     console.error('Get customer by phone error:', error);
