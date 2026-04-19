@@ -120,6 +120,7 @@ export default function Items() {
   const [loadingBatches, setLoadingBatches] = useState(false);
   const [selectedBatchIndex, setSelectedBatchIndex] = useState(null);
   const [loadingBarcodes, setLoadingBarcodes] = useState(false);
+  const autoLoadedBarcodeRef = useRef({ itemKey: null });
   const [editForm, setEditForm] = useState({
     name: "",
     sku: "",
@@ -1529,6 +1530,30 @@ export default function Items() {
     }
   };
 
+  // Auto-load barcodes for the first entry when the dialog opens (so users don't miss the fetch)
+  useEffect(() => {
+    if (!isEditOpen) return;
+    if (!editingItem) return;
+    if (loadingBatches || loadingBarcodes) return;
+    if (!Array.isArray(itemBatches) || itemBatches.length === 0) return;
+    if (selectedBatchIndex !== null) return;
+
+    const itemKey = identifierForItem(editingItem);
+    if (autoLoadedBarcodeRef.current.itemKey === itemKey) return;
+    autoLoadedBarcodeRef.current.itemKey = itemKey;
+
+    // Fire and forget; UI shows its own loading state
+    handleBatchSelect("0");
+  }, [
+    isEditOpen,
+    editingItem,
+    itemBatches,
+    selectedBatchIndex,
+    loadingBatches,
+    loadingBarcodes,
+    handleBatchSelect,
+  ]);
+
   // Handle printing barcodes - directly print in double label mode
   const handlePrintBarcodes = () => {
     // Check if batch is selected
@@ -1698,7 +1723,10 @@ export default function Items() {
       
       const formattedExpiryDate = formatDate(expiryDate);
       const priceText = price ? `Rs. ${Number(price).toFixed(2)}` : '';
-      const batchText = batchNumber ? `Batch: ${batchNumber}` : '';
+      const invoiceOrBatch =
+        (selectedBatch?.invoiceNumber || '').toString().trim() ||
+        (batchNumber || '').toString().trim();
+      const batchText = invoiceOrBatch ? `Invoice: ${invoiceOrBatch}` : '';
       const storeName = defaultStoreName;
       
       // Debug logging for each label - log all labels to see the data
@@ -3736,39 +3764,42 @@ export default function Items() {
               </div>
             </div>
 
-            {/* Batches with Barcodes Section */}
+            {/* Invoice number with Barcodes Section */}
             <div className="space-y-4 border-t pt-4">
               <div className="flex items-center gap-2">
                 <Barcode className="h-5 w-5 text-blue-600" />
-                <Label className="text-lg font-semibold">Batches & Barcodes</Label>
+                <Label className="text-lg font-semibold">Invoice number & Barcodes</Label>
               </div>
               {loadingBatches ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                  <span className="ml-2 text-sm text-muted-foreground">Loading batches...</span>
+                  <span className="ml-2 text-sm text-muted-foreground">Loading invoices...</span>
                 </div>
               ) : itemBatches.length > 0 ? (
                 <div className="space-y-4">
-                  {/* Batch Dropdown */}
+                  {/* Invoice Dropdown */}
                   <div className="space-y-2">
-                    <Label htmlFor="batch-select">Select Batch</Label>
+                    <Label htmlFor="batch-select">Select Invoice number</Label>
                     <Select
                       value={selectedBatchIndex !== null ? String(selectedBatchIndex) : ""}
                       onValueChange={handleBatchSelect}
                     >
                       <SelectTrigger id="batch-select" className="w-full">
-                        <SelectValue placeholder="Select a batch to view barcodes" />
+                        <SelectValue placeholder="Select an invoice to view barcodes" />
                       </SelectTrigger>
                       <SelectContent>
                         {itemBatches.map((batch, index) => {
-                          const batchDisplay = batch.batchNumber || 'N/A';
+                          const invoiceDisplay =
+                            (batch.invoiceNumber || "").toString().trim() ||
+                            (batch.batchNumber || "").toString().trim() ||
+                            "N/A";
                           const poNumber = batch.purchaseOrderNumber ? ` (PO: ${batch.purchaseOrderNumber})` : '';
                           const qty = batch.batchQuantity ? ` - Qty: ${batch.batchQuantity}` : '';
                           const expiry = batch.expiryDate ? ` - Exp: ${new Date(batch.expiryDate).toLocaleDateString()}` : '';
                           const cost = batch.costPrice ? ` - ₹${batch.costPrice.toFixed(2)}` : '';
                           return (
                             <SelectItem key={index} value={String(index)}>
-                              Batch: {batchDisplay}{poNumber}{qty}{cost}{expiry}
+                              Invoice: {invoiceDisplay}{poNumber}{qty}{cost}{expiry}
                             </SelectItem>
                           );
                         })}

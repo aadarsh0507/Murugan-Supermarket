@@ -52,13 +52,44 @@ export const createPurchaseOrder = async (req, res) => {
       (req.user?.email && String(req.user.email).trim()) ||
       null;
 
+    const trimmedInvoiceNumber =
+      req.body.invoiceNumber ?? req.body.invoice_number ?? req.body.invoice ?? null;
+    const invoiceNumber =
+      trimmedInvoiceNumber !== undefined && trimmedInvoiceNumber !== null
+        ? String(trimmedInvoiceNumber).trim()
+        : '';
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invoice number is required.',
+      });
+    }
+
+    // Use invoice number as the batch number for all PO items (no separate batch field required in UI)
+    const items =
+      Array.isArray(req.body.items) && req.body.items.length > 0
+        ? req.body.items.map((item) => {
+            const existingBatch =
+              item?.batchNumber ?? item?.batch_number ?? item?.batch ?? null;
+            const batch =
+              existingBatch !== undefined && existingBatch !== null
+                ? String(existingBatch).trim()
+                : '';
+            return {
+              ...item,
+              batchNumber: batch || invoiceNumber,
+            };
+          })
+        : req.body.items;
+
     const purchaseOrder = await createPurchaseOrderRepo({
       supplier: req.body.supplier,
       store: resolvedStoreId,
       orderDate: req.body.orderDate,
       expectedDeliveryDate: req.body.expectedDeliveryDate,
-      invoiceNumber: req.body.invoiceNumber ?? req.body.invoice_number,
-      items: req.body.items,
+      // Invoice number is stored on purchase_orders and also used as item batch number
+      invoiceNumber,
+      items,
       tax: req.body.tax,
       discount: req.body.discount,
       shipping: req.body.shipping,
@@ -136,13 +167,42 @@ export const updatePurchaseOrder = async (req, res) => {
       Number(req.user?.selectedStoreId) ||
       null;
 
+    const trimmedInvoiceNumber =
+      req.body.invoiceNumber ?? req.body.invoice_number ?? req.body.invoice ?? null;
+    const invoiceNumber =
+      trimmedInvoiceNumber !== undefined && trimmedInvoiceNumber !== null
+        ? String(trimmedInvoiceNumber).trim()
+        : '';
+    if (!invoiceNumber) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invoice number is required.',
+      });
+    }
+
+    const items =
+      Array.isArray(req.body.items) && req.body.items.length > 0
+        ? req.body.items.map((item) => {
+            const existingBatch =
+              item?.batchNumber ?? item?.batch_number ?? item?.batch ?? null;
+            const batch =
+              existingBatch !== undefined && existingBatch !== null
+                ? String(existingBatch).trim()
+                : '';
+            return {
+              ...item,
+              batchNumber: batch || invoiceNumber,
+            };
+          })
+        : req.body.items;
+
     const purchaseOrder = await updatePurchaseOrderRepo(req.params.id, {
       supplier: req.body.supplier,
       store: resolvedStoreId || req.body.store, // Use resolved store or keep original if provided
       orderDate: req.body.orderDate,
       expectedDeliveryDate: req.body.expectedDeliveryDate,
-      invoiceNumber: req.body.invoiceNumber ?? req.body.invoice_number,
-      items: req.body.items,
+      invoiceNumber,
+      items,
       tax: req.body.tax,
       discount: req.body.discount,
       shipping: req.body.shipping,

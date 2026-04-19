@@ -14,7 +14,8 @@ import {
 const router = express.Router();
 
 router.use(protect);
-router.use(requireScreen('purchase-orders'));
+// Allow barcodes lookup from Items screen too (Item edit → Reprint Barcodes)
+router.use(requireScreen(['purchase-orders', 'items']));
 
 router.get('/', getPurchaseOrders);
 router.post('/', createPurchaseOrder);

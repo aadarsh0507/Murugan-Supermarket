@@ -808,6 +808,16 @@ const PurchaseOrders = () => {
       return null;
     }
 
+    const trimmedInvoiceNumber = (data.invoiceNumber || "").trim();
+    if (!trimmedInvoiceNumber) {
+      toast({
+        title: "Invoice number required",
+        description: "Please enter invoice number (use batch number).",
+        variant: "destructive"
+      });
+      return null;
+    }
+
     // Filter out empty items - check for itemId (properly selected item) and quantity > 0
     const validItems = data.items.filter(item =>
       item.itemId && item.poQty > 0
@@ -826,7 +836,7 @@ const PurchaseOrders = () => {
       supplier: data.supplier,
       store: data.store,
       orderDate: data.quotationDate,
-      invoiceNumber: (data.invoiceNumber || "").trim() || null,
+      invoiceNumber: trimmedInvoiceNumber,
       // Only include expectedDeliveryDate if it has a value
       ...(data.dueDate && data.dueDate.trim() !== "" && { expectedDeliveryDate: data.dueDate }),
       items: validItems.map(item => {
@@ -1684,7 +1694,7 @@ const PurchaseOrders = () => {
                 {loadError}
               </div>
             )}
-            {/* Minimal fields: Supplier, Store, date, invoice number */}
+            {/* Minimal fields: Supplier, Store, date, batch/invoice */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
               <div>
                 <Label>Supplier Name</Label>
@@ -1785,67 +1795,58 @@ const PurchaseOrders = () => {
                 </Popover>
               </div>
               <div>
-                <Label htmlFor="po-invoice-number">Invoice number</Label>
+                <Label htmlFor="po-invoice-number">
+                  Invoice number (use Batch number) <span className="text-destructive">*</span>
+                </Label>
                 <Input
                   id="po-invoice-number"
                   type="text"
                   maxLength={100}
-                  placeholder="Optional"
+                  placeholder="Enter batch number"
                   value={formData.invoiceNumber}
                   onChange={(e) =>
                     setFormData((prev) => ({ ...prev, invoiceNumber: e.target.value }))
                   }
                   className="h-10"
+                  required
                 />
               </div>
             </div>
           </CardContent>
         </Card>
 
-        {/* Supplier Details Section */}
-        {formData.supplierDetails && (
-          <Card className="overflow-hidden">
-            <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
-              <h3 className="font-semibold mb-4 text-blue-600">Supplier Details</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                <div>
-                  <Label className="text-xs text-gray-500">Contact Person</Label>
-                  <p className="font-medium">
-                    {formData.supplierDetails.contactPerson?.firstName || ''} {formData.supplierDetails.contactPerson?.lastName || ''}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Email</Label>
-                  <p className="font-medium">{formData.supplierDetails.email || '-'}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Phone</Label>
-                  <p className="font-medium">{formData.supplierDetails.phone?.primary || '-'}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">Address</Label>
-                  <p className="font-medium">
-                    {formData.supplierDetails.address?.street || ''}, {formData.supplierDetails.address?.city || ''}
-                  </p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">GST Number</Label>
-                  <p className="font-medium">{formData.supplierDetails.gstNumber || '-'}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-gray-500">PAN Number</Label>
-                  <p className="font-medium">{formData.supplierDetails.panNumber || '-'}</p>
-                </div>
-                {formData.supplierDetails.paymentTerms && (
-                  <div>
-                    <Label className="text-xs text-gray-500">Payment Terms</Label>
-                    <p className="font-medium">{formData.supplierDetails.paymentTerms}</p>
-                  </div>
-                )}
+        {/* Supplier Details Section (intentionally blank UI) */}
+        <Card className="overflow-hidden">
+          <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
+            <h3 className="font-semibold mb-4 text-blue-600">Supplier Details</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div>
+                <Label className="text-xs text-gray-500">Contact Person</Label>
+                <p className="font-medium">&nbsp;</p>
               </div>
-            </CardContent>
-          </Card>
-        )}
+              <div>
+                <Label className="text-xs text-gray-500">Email</Label>
+                <p className="font-medium">&nbsp;</p>
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500">Phone</Label>
+                <p className="font-medium">&nbsp;</p>
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500">Address</Label>
+                <p className="font-medium">&nbsp;</p>
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500">GST Number</Label>
+                <p className="font-medium">&nbsp;</p>
+              </div>
+              <div>
+                <Label className="text-xs text-gray-500">PAN Number</Label>
+                <p className="font-medium">&nbsp;</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Summary Section */}
         <Card className="overflow-hidden">
