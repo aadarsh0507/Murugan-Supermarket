@@ -31,6 +31,41 @@ const CRITICAL_STOCK_THRESHOLD = 5;
 /** Shown on product cards when the BOGO checkbox is enabled */
 const BOGO_OFFER_CARD_LABEL = "Buy 1 Get 1 Free";
 
+/**
+ * Subcategory value aligned with Brand.subcategory_id and Brands master screen:
+ * composite `categoryCode:subcategoryCode` from API `id` when present.
+ */
+function subcategoryOptionValue(sub, categoryCode) {
+  const id = sub?.id != null ? String(sub.id).trim() : "";
+  if (id) return id;
+  const code = String(sub?.code ?? "").trim();
+  const cat = String(categoryCode ?? "").trim();
+  if (cat && code) return `${cat}:${code}`;
+  return code;
+}
+
+/** Subcategory code only — for items list filter (items API expects numeric / plain code). */
+function subcategoryCodeForItemsApi(sub) {
+  const code = String(sub?.code ?? "").trim();
+  if (code) return code;
+  const id = String(sub?.id ?? "").trim();
+  if (id.includes(":")) {
+    const tail = id.split(":").slice(1).join(":").trim();
+    return tail || id;
+  }
+  return id;
+}
+
+/** Query param for GET /brands when form may hold code-only or composite. */
+function subcategoryIdForBrandApi(subcategoryIdFromForm, categoryIdFromForm) {
+  const sid = String(subcategoryIdFromForm ?? "").trim();
+  if (!sid) return null;
+  if (sid.includes(":")) return sid;
+  const cid = String(categoryIdFromForm ?? "").trim();
+  if (cid) return `${cid}:${sid}`;
+  return sid;
+}
+
 /** Move focus to the next editable control in an item edit/create form (Enter key). */
 function focusNextFieldInForm(form, activeElement) {
   const selector =
@@ -110,6 +145,7 @@ export default function Items() {
   const hadExplicitPageParamRef = useRef(false);
   const autoSelectedLatestRef = useRef(false);
   const hasInitializedRef = useRef(false);
+  const categoryHierarchyRef = useRef([]);
 
   const [imagePreview, setImagePreview] = useState(null);
   const [imageFile, setImageFile] = useState(null);
@@ -158,6 +194,15 @@ export default function Items() {
   const [newSubcategoryInItemForm, setNewSubcategoryInItemForm] = useState("");
   const [selectedCategoryForSubcategoryInItem, setSelectedCategoryForSubcategoryInItem] = useState(null);
   const [stockStatusFilter, setStockStatusFilter] = useState("all");
+  /** Subcategories for the Items list filter row (loaded when a category is selected). */
+  const [itemScreenSubcategories, setItemScreenSubcategories] = useState([]);
+  const [loadingItemScreenSubcategories, setLoadingItemScreenSubcategories] = useState(false);
+  /** Subcategories for Create Item dialog (GET category when a category is chosen). */
+  const [createDialogSubcategories, setCreateDialogSubcategories] = useState([]);
+  const [loadingCreateDialogSubcategories, setLoadingCreateDialogSubcategories] = useState(false);
+  /** Subcategories for Edit Item dialog. */
+  const [editDialogSubcategories, setEditDialogSubcategories] = useState([]);
+  const [loadingEditDialogSubcategories, setLoadingEditDialogSubcategories] = useState(false);
 
   // Reset to page 1 on initial mount/reload
   useEffect(() => {
@@ -180,6 +225,7 @@ export default function Items() {
   }, [categoryDropdownOpen]);
   const requestIdRef = useRef(0);
   const debouncedSearchTerm = useDebounce(searchTerm, 400);
+  categoryHierarchyRef.current = categoryHierarchy;
   const categoryFilter = selectedCategory !== "all" ? selectedCategory : undefined;
   // Extract subcategory code from composite ID if needed
   const subcategoryFilter = selectedSubcategory !== "all"
@@ -377,6 +423,161 @@ export default function Items() {
     loadCategories();
   }, [selectedStore]);
 
+  // When a category is chosen on the Items screen, load its subcategories from the API (avoids strict id mismatch with hierarchy-only lookup).
+  useEffect(() => {
+    if (selectedCategory === "all") {
+      setItemScreenSubcategories([]);
+      setLoadingItemScreenSubcategories(false);
+      return;
+    }
+
+    let cancelled = false;
+    const categoryIdStr = String(selectedCategory);
+    setLoadingItemScreenSubcategories(true);
+    setItemScreenSubcategories([]);
+
+    (async () => {
+      try {
+        const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
+        const params = storeId ? { store_id: storeId } : {};
+        const res = await categoriesAPI.getCategory(categoryIdStr, params);
+        const subcats = res?.data?.subcategories;
+        const list = Array.isArray(subcats) ? subcats : [];
+        if (!cancelled) {
+          setItemScreenSubcategories(list);
+        }
+      } catch (e) {
+        console.error("Error loading subcategories for filter:", e);
+        if (!cancelled) {
+          const cat = categoryHierarchyRef.current.find(
+            (c) => String(c.id ?? c._id) === categoryIdStr
+          );
+          setItemScreenSubcategories(
+            Array.isArray(cat?.subcategories) ? cat.subcategories : []
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingItemScreenSubcategories(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCategory, selectedStore]);
+
+  useEffect(() => {
+    if (!isCreateItemOpen || !createItemForm.categoryId) {
+      setCreateDialogSubcategories([]);
+      setLoadingCreateDialogSubcategories(false);
+      return;
+    }
+    let cancelled = false;
+    const categoryIdStr = String(createItemForm.categoryId);
+    setLoadingCreateDialogSubcategories(true);
+    setCreateDialogSubcategories([]);
+
+    (async () => {
+      try {
+        const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
+        const params = storeId ? { store_id: storeId } : {};
+        const res = await categoriesAPI.getCategory(categoryIdStr, params);
+        const list = Array.isArray(res?.data?.subcategories) ? res.data.subcategories : [];
+        if (!cancelled) {
+          setCreateDialogSubcategories(list);
+        }
+      } catch (e) {
+        console.error("Error loading subcategories for create item:", e);
+        if (!cancelled) {
+          const cat = categoryHierarchyRef.current.find(
+            (c) => String(c.id ?? c._id) === categoryIdStr
+          );
+          setCreateDialogSubcategories(
+            Array.isArray(cat?.subcategories) ? cat.subcategories : []
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingCreateDialogSubcategories(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isCreateItemOpen, createItemForm.categoryId, selectedStore]);
+
+  useEffect(() => {
+    if (!isEditOpen || !editForm.categoryId) {
+      setEditDialogSubcategories([]);
+      setLoadingEditDialogSubcategories(false);
+      return;
+    }
+    let cancelled = false;
+    const categoryIdStr = String(editForm.categoryId);
+    setLoadingEditDialogSubcategories(true);
+    setEditDialogSubcategories([]);
+
+    (async () => {
+      try {
+        const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
+        const params = storeId ? { store_id: storeId } : {};
+        const res = await categoriesAPI.getCategory(categoryIdStr, params);
+        const list = Array.isArray(res?.data?.subcategories) ? res.data.subcategories : [];
+        if (!cancelled) {
+          setEditDialogSubcategories(list);
+        }
+      } catch (e) {
+        console.error("Error loading subcategories for edit item:", e);
+        if (!cancelled) {
+          const cat = categoryHierarchyRef.current.find(
+            (c) => String(c.id ?? c._id) === categoryIdStr
+          );
+          setEditDialogSubcategories(
+            Array.isArray(cat?.subcategories) ? cat.subcategories : []
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setLoadingEditDialogSubcategories(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isEditOpen, editForm.categoryId, selectedStore]);
+
+  // Align edit form subcategory with Brand API format (composite id) when item had code-only.
+  useEffect(() => {
+    if (!isEditOpen || loadingEditDialogSubcategories) return;
+    if (!editDialogSubcategories.length || !editForm.categoryId) return;
+    const cur = String(editForm.subcategoryId ?? "").trim();
+    if (!cur || cur.includes(":")) return;
+
+    const match = editDialogSubcategories.find(
+      (s) =>
+        String(s.code ?? "").trim() === cur ||
+        String(s.id ?? "").trim() === cur ||
+        String(s.id ?? "").endsWith(`:${cur}`)
+    );
+    if (!match) return;
+    const next = subcategoryOptionValue(match, editForm.categoryId);
+    if (next && next !== cur) {
+      setEditForm((prev) => ({ ...prev, subcategoryId: next }));
+    }
+  }, [
+    isEditOpen,
+    loadingEditDialogSubcategories,
+    editDialogSubcategories,
+    editForm.categoryId,
+    editForm.subcategoryId,
+  ]);
+
   useEffect(() => {
     const loadBrands = async () => {
       try {
@@ -385,13 +586,21 @@ export default function Items() {
         if (storeId) {
           brandParams.store_id = storeId;
         }
-        const activeSubId = isCreateItemOpen
-          ? createItemForm.subcategoryId || null
-          : isEditOpen
-            ? editForm.subcategoryId || null
-            : null;
-        if (activeSubId) {
-          brandParams.subcategory_id = activeSubId;
+        const rawSub =
+          isCreateItemOpen
+            ? createItemForm.subcategoryId || null
+            : isEditOpen
+              ? editForm.subcategoryId || null
+              : null;
+        const categoryForBrand =
+          isCreateItemOpen
+            ? createItemForm.categoryId || null
+            : isEditOpen
+              ? editForm.categoryId || null
+              : null;
+        const brandSubKey = subcategoryIdForBrandApi(rawSub, categoryForBrand);
+        if (brandSubKey) {
+          brandParams.subcategory_id = brandSubKey;
           brandParams.include_legacy = "true";
         }
         const brandsResponse = await brandsAPI.getBrands(brandParams);
@@ -410,7 +619,9 @@ export default function Items() {
     isCreateItemOpen,
     isEditOpen,
     createItemForm.subcategoryId,
+    createItemForm.categoryId,
     editForm.subcategoryId,
+    editForm.categoryId,
   ]);
 
 
@@ -482,26 +693,7 @@ export default function Items() {
           console.error("Error loading categories:", error);
         }
       };
-      const loadBrandsForEditForm = async () => {
-        try {
-          const storeId = selectedStore?._id || selectedStore?.id || selectedStore;
-          const brandParams = { limit: 1000 };
-          if (storeId) {
-            brandParams.store_id = storeId;
-          }
-          const brandsResponse = await brandsAPI.getBrands(brandParams);
-          const fetchedBrands =
-            brandsResponse?.data?.brands ||
-            brandsResponse?.brands ||
-            [];
-          setBrands(Array.isArray(fetchedBrands) ? fetchedBrands : []);
-        } catch (error) {
-          console.error("Error loading brands:", error);
-        }
-      };
-
       loadCategoriesForEditForm();
-      loadBrandsForEditForm();
     }
   }, [isEditOpen, selectedStore]);
 
@@ -2493,8 +2685,12 @@ export default function Items() {
       if (storeId) {
         brandData.store_id = storeId;
       }
-      if (createItemForm.subcategoryId) {
-        brandData.subcategory_id = createItemForm.subcategoryId;
+      const brandSub = subcategoryIdForBrandApi(
+        createItemForm.subcategoryId,
+        createItemForm.categoryId
+      );
+      if (brandSub) {
+        brandData.subcategory_id = brandSub;
       }
 
       const response = await brandsAPI.createBrand(brandData);
@@ -2608,15 +2804,45 @@ export default function Items() {
 
       // Refresh the selected category to get updated subcategories
       const updatedCategory = hierarchy.find(
-        cat => (cat._id || cat.id) === (selectedCategoryForSubcategoryInItem._id || selectedCategoryForSubcategoryInItem.id)
+        (cat) =>
+          String(cat._id ?? cat.id ?? cat.code) ===
+          String(
+            selectedCategoryForSubcategoryInItem._id ??
+              selectedCategoryForSubcategoryInItem.id ??
+              selectedCategoryForSubcategoryInItem.code
+          )
       );
       if (updatedCategory && updatedCategory.subcategories) {
         const newSubcategory = updatedCategory.subcategories[updatedCategory.subcategories.length - 1];
-        setCreateItemForm(prev => ({
+        setCreateItemForm((prev) => ({
           ...prev,
-          categoryId: selectedCategoryForSubcategoryInItem._id || selectedCategoryForSubcategoryInItem.id,
-          subcategoryId: newSubcategory._id || newSubcategory.id
+          categoryId: String(
+            selectedCategoryForSubcategoryInItem._id ??
+              selectedCategoryForSubcategoryInItem.id ??
+              selectedCategoryForSubcategoryInItem.code
+          ),
+          subcategoryId: subcategoryOptionValue(
+            newSubcategory,
+            selectedCategoryForSubcategoryInItem._id ??
+              selectedCategoryForSubcategoryInItem.id ??
+              selectedCategoryForSubcategoryInItem.code
+          ),
         }));
+      }
+
+      try {
+        const catKey = String(
+          selectedCategoryForSubcategoryInItem._id ??
+            selectedCategoryForSubcategoryInItem.id ??
+            selectedCategoryForSubcategoryInItem.code
+        );
+        const detail = await categoriesAPI.getCategory(catKey, storeId ? { store_id: storeId } : {});
+        const freshSubs = Array.isArray(detail?.data?.subcategories)
+          ? detail.data.subcategories
+          : [];
+        setCreateDialogSubcategories(freshSubs);
+      } catch {
+        /* ignore */
       }
     } catch (error) {
       console.error("Error creating subcategory:", error);
@@ -2883,7 +3109,8 @@ export default function Items() {
                         </CommandItem>
                         {categoryHierarchy.map((category) => {
                           const categoryId = category.id ?? category._id;
-                          const isSelected = selectedCategory === categoryId;
+                          const isSelected =
+                            String(selectedCategory) === String(categoryId ?? "");
                           // Include both name and code in the value for better search
                           const searchValue = `${category.name} ${category.code || ""}`.trim();
                           return (
@@ -2913,35 +3140,33 @@ export default function Items() {
                 </PopoverContent>
               </Popover>
             </div>
-            {selectedCategory !== "all" && (() => {
-              const selectedCat = categoryHierarchy.find(
-                (cat) => (cat.id ?? cat._id) === selectedCategory
-              );
-              const subcategories = selectedCat?.subcategories || [];
-
-              if (subcategories.length === 0) return null;
-
-              return (
-                <div className="flex flex-wrap items-center gap-2">
+            {selectedCategory !== "all" && (
+              <div className="flex flex-wrap items-center gap-2">
+                {loadingItemScreenSubcategories ? (
+                  <div className="flex h-10 w-[220px] items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                    <span>Loading subcategories…</span>
+                  </div>
+                ) : itemScreenSubcategories.length > 0 ? (
                   <Select
-                    value={selectedSubcategory === "all" ? "all" : selectedSubcategory}
+                    value={selectedSubcategory === "all" ? "all" : String(selectedSubcategory)}
                     onValueChange={(value) => setSelectedSubcategory(value)}
                   >
                     <SelectTrigger className="w-[220px] justify-between">
                       <SelectValue placeholder="Select subcategory..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">
-                        All Subcategories
-                      </SelectItem>
-                      {subcategories.map((subcategory, subIndex) => {
-                        // Use subcategory code for filtering (the actual value in database)
-                        const subcategoryValue = subcategory.code ?? subcategory.id;
-                        const subcategoryName = subcategory.name || `Subcategory ${subcategoryValue}`;
+                      <SelectItem value="all">All Subcategories</SelectItem>
+                      {itemScreenSubcategories.map((subcategory, subIndex) => {
+                        const subcategoryValue = String(
+                          subcategoryCodeForItemsApi(subcategory) || subIndex
+                        );
+                        const subcategoryName =
+                          subcategory.name || `Subcategory ${subcategoryValue}`;
 
                         return (
                           <SelectItem
-                            key={`subcategory-${subcategory.id ?? subIndex}`}
+                            key={`subcategory-${subcategory.id ?? subcategory.code ?? subIndex}`}
                             value={subcategoryValue}
                           >
                             {subcategoryName}
@@ -2950,9 +3175,13 @@ export default function Items() {
                       })}
                     </SelectContent>
                   </Select>
-                </div>
-              );
-            })()}
+                ) : (
+                  <p className="text-sm text-muted-foreground px-1">
+                    No subcategories in this category.
+                  </p>
+                )}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <Select value={stockStatusFilter} onValueChange={setStockStatusFilter}>
                 <SelectTrigger className="w-[220px] justify-between">
@@ -3167,9 +3396,9 @@ export default function Items() {
               </div>
             </div>
 
-            {/* Category (subcategory stays on the item for APIs/brands; change it from Subcategories master if needed) */}
+            {/* Category & subcategory (brands load per subcategory) */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Category</h3>
+              <h3 className="text-lg font-semibold">Category & Subcategory</h3>
               <div className="space-y-2">
                 <Label htmlFor="edit-item-category">Category</Label>
                 <Popover open={editCategoryPopoverOpen} onOpenChange={setEditCategoryPopoverOpen}>
@@ -3205,18 +3434,27 @@ export default function Items() {
                                 onSelect={() => {
                                   const subcats = category.subcategories || [];
                                   setEditForm((prev) => {
-                                    const stillValid = subcats.some(
-                                      (s) => String(s._id ?? s.id) === String(prev.subcategoryId)
-                                    );
+                                    const prevStr = String(prev.subcategoryId ?? "");
+                                    const stillValid = subcats.some((s) => {
+                                      const v = subcategoryOptionValue(s, categoryId);
+                                      return (
+                                        v === prevStr ||
+                                        String(s.code ?? "") === prevStr ||
+                                        (prevStr.includes(":") &&
+                                          v.endsWith(`:${prevStr.split(":").pop()}`))
+                                      );
+                                    });
                                     const nextSub = stillValid
                                       ? prev.subcategoryId
                                       : subcats[0]
-                                        ? String(subcats[0]._id ?? subcats[0].id)
+                                        ? subcategoryOptionValue(subcats[0], categoryId)
                                         : "";
                                     return {
                                       ...prev,
                                       categoryId,
                                       subcategoryId: nextSub,
+                                      brandId: "",
+                                      brand: ""
                                     };
                                   });
                                   setEditCategoryPopoverOpen(false);
@@ -3239,6 +3477,50 @@ export default function Items() {
                   </PopoverContent>
                 </Popover>
               </div>
+
+              {editForm.categoryId && (
+                <div className="space-y-2">
+                  <Label htmlFor="edit-item-subcategory">Subcategory</Label>
+                  {loadingEditDialogSubcategories ? (
+                    <div className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                      <span>Loading subcategories…</span>
+                    </div>
+                  ) : editDialogSubcategories.length > 0 ? (
+                    <Select
+                      value={String(editForm.subcategoryId || "")}
+                      onValueChange={(value) =>
+                        setEditForm((prev) => ({
+                          ...prev,
+                          subcategoryId: value,
+                          brandId: "",
+                          brand: ""
+                        }))
+                      }
+                    >
+                      <SelectTrigger id="edit-item-subcategory">
+                        <SelectValue placeholder="Select subcategory..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {editDialogSubcategories.map((sub, idx) => {
+                          const subVal =
+                            subcategoryOptionValue(sub, editForm.categoryId) ||
+                            String(idx);
+                          return (
+                            <SelectItem key={`edit-sub-${subVal}-${idx}`} value={subVal}>
+                              {sub.name || `Subcategory ${subVal}`}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      No subcategories in this category.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Brand Selection - Only show after subcategory is selected */}
               {editForm.subcategoryId && (
@@ -4070,27 +4352,46 @@ export default function Items() {
                   </div>
 
                   {!showSubcategoryCreation ? (
-                    <Select
-                      value={createItemForm.subcategoryId || ""}
-                      onValueChange={(value) => setCreateItemForm(prev => ({ ...prev, subcategoryId: value }))}
-                    >
-                      <SelectTrigger id="create-item-subcategory">
-                        <SelectValue placeholder="Select subcategory..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(() => {
-                          const selectedCat = categoryHierarchy.find(
-                            cat => (cat._id || cat.id) === createItemForm.categoryId
-                          );
-                          const subcategories = selectedCat?.subcategories || [];
-                          return subcategories.map((subcategory) => (
-                            <SelectItem key={subcategory._id || subcategory.id} value={subcategory._id || subcategory.id}>
-                              {subcategory.name}
-                            </SelectItem>
-                          ));
-                        })()}
-                      </SelectContent>
-                    </Select>
+                    loadingCreateDialogSubcategories ? (
+                      <div className="flex h-10 w-full items-center justify-center gap-2 rounded-md border border-input bg-background px-3 text-sm text-muted-foreground">
+                        <Loader2 className="h-4 w-4 animate-spin shrink-0" />
+                        <span>Loading subcategories…</span>
+                      </div>
+                    ) : createDialogSubcategories.length > 0 ? (
+                      <Select
+                        value={String(createItemForm.subcategoryId || "")}
+                        onValueChange={(value) =>
+                          setCreateItemForm((prev) => ({
+                            ...prev,
+                            subcategoryId: value
+                          }))
+                        }
+                      >
+                        <SelectTrigger id="create-item-subcategory">
+                          <SelectValue placeholder="Select subcategory..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {createDialogSubcategories.map((subcategory, idx) => {
+                            const subVal = subcategoryOptionValue(
+                              subcategory,
+                              createItemForm.categoryId
+                            ) || String(idx);
+                            return (
+                              <SelectItem
+                                key={`create-sub-${subVal}-${idx}`}
+                                value={subVal}
+                              >
+                                {subcategory.name || `Subcategory ${subVal}`}
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <p className="text-sm text-muted-foreground">
+                        No subcategories yet. Use + Create Subcategory or pick another category.
+                      </p>
+                    )
                   ) : (
                     <div className="space-y-2 p-4 border rounded-lg bg-muted/50">
                       <Label>Create New Subcategory</Label>

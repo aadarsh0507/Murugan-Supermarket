@@ -73,6 +73,17 @@ const bogoDefaultQuantity = (item = {}) => (itemHasBogoOffer(item) ? 2 : 1);
 
 const bogoQuantityIncrement = (item = {}) => (itemHasBogoOffer(item) ? 2 : 1);
 
+/**
+ * Buy-one-get-one-free: amount scales with physical qty ÷ 2 (half the units are “paid”).
+ * e.g. rate ₹700, qty 2 → ₹700; qty 1 → ₹350.
+ */
+const bogoBillableQuantity = (physicalQty, line = {}) => {
+  const qty = Number.parseInt(physicalQty, 10);
+  if (!Number.isFinite(qty) || qty <= 0) return 0;
+  if (!itemHasBogoOffer(line)) return qty;
+  return qty / 2;
+};
+
 const normalizeItem = (item = {}) => {
   const sourceId =
     item.id ??
@@ -198,7 +209,8 @@ const getBillTotals = (bill) => {
     const qty = Number.parseInt(line.quantity, 10);
     const price = Number(line.price) || 0;
     if (!Number.isFinite(qty) || qty <= 0) return sum;
-    return sum + price * qty;
+    const billable = bogoBillableQuantity(qty, line);
+    return sum + price * billable;
   }, 0);
   const discount = Number.parseFloat(bill.discount || 0) || 0;
   const tax = Number.parseFloat(bill.tax || 0) || 0;
@@ -573,7 +585,8 @@ export default function Billing() {
     
     // BOGO items default to quantity 2 (user can change before adding)
     const quantity = bogoDefaultQuantity(normalized);
-    const baseAmount = (normalized.price || 0) * quantity;
+    const billableQty = bogoBillableQuantity(quantity, normalized);
+    const baseAmount = (normalized.price || 0) * billableQty;
     const gstRate = normalized.gstRate || 0;
     const gstAmount = (baseAmount * gstRate) / 100;
     const sgstAmount = gstAmount / 2;
@@ -631,7 +644,8 @@ export default function Billing() {
       const quantity = Number(newItemRow.quantity) || 1;
       const price = Number(newItemRow.price) || 0;
       const gstRate = Number(newItemRow.gstRate) || 0;
-      const baseAmount = price * quantity;
+      const billableQty = bogoBillableQuantity(quantity, newItemRow);
+      const baseAmount = price * billableQty;
       
       const newGstAmount = (baseAmount * gstRate) / 100;
       const newSgstAmount = newGstAmount / 2;
@@ -648,7 +662,7 @@ export default function Billing() {
         }));
       }
     }
-  }, [newItemRow.quantity, newItemRow.price, newItemRow.gstRate]);
+  }, [newItemRow.quantity, newItemRow.price, newItemRow.gstRate, newItemRow.bogoOffer]);
 
   // Update dropdown position on scroll/resize
   useEffect(() => {
@@ -1047,7 +1061,13 @@ export default function Billing() {
           if (index !== existingIndex) return line;
           const prev = Number.parseInt(line.quantity, 10);
           const safe = Number.isFinite(prev) && prev > 0 ? prev : 1;
-          return { ...line, quantity: safe + delta };
+          return {
+            ...line,
+            quantity: safe + delta,
+            gstAmount: undefined,
+            sgstAmount: undefined,
+            cgstAmount: undefined,
+          };
         });
         return {
           items: updatedItems,
@@ -1095,7 +1115,16 @@ export default function Billing() {
     
     updateBill(billId, (bill) => ({
       items: bill.items.map((line) =>
-        line.lineId === lineId ? { ...line, quantity: quantity } : line
+        line.lineId === lineId
+          ? {
+              ...line,
+              quantity,
+              // Drop manual GST so BOGO / qty changes recalc from rate × billable amount
+              gstAmount: undefined,
+              sgstAmount: undefined,
+              cgstAmount: undefined,
+            }
+          : line
       ),
       isSaved: false,
       savedBillNo: null,
@@ -1282,7 +1311,8 @@ export default function Billing() {
         }
 
         const parsedId = Number.parseInt(line.sourceId, 10);
-        const total = Number((quantity * unitPrice).toFixed(2));
+        const billableQty = bogoBillableQuantity(quantity, line);
+        const total = Number((billableQty * unitPrice).toFixed(2));
 
         // Build payload object, only including defined fields
         const payload = {
@@ -1292,6 +1322,11 @@ export default function Billing() {
           sellingPrice: Number(unitPrice.toFixed(2)),
           total
         };
+
+        const bogoLabel = String(line.bogoOffer ?? line.bogo_offer ?? "").trim();
+        if (bogoLabel) {
+          payload.bogoOffer = bogoLabel;
+        }
 
         // Only include itemId if it's a valid positive integer
         if (Number.isFinite(parsedId) && parsedId > 0) {
@@ -1868,7 +1903,8 @@ export default function Billing() {
                       {activeBill?.items.map((line, index) => {
                         const qtyNum = Number.parseInt(line.quantity, 10);
                         const safeQty = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 0;
-                        const baseAmount = Number(line.price || 0) * safeQty;
+                        const billableQty = bogoBillableQuantity(safeQty, line);
+                        const baseAmount = Number(line.price || 0) * billableQty;
                         const gstRate = line.gstRate ?? 0;
                         // Use manual values if set, otherwise calculate
                         const gstAmount = line.gstAmount !== undefined ? line.gstAmount : (baseAmount * gstRate) / 100;
@@ -2521,7 +2557,14 @@ export default function Billing() {
                         {/* Base Amount */}
                         <td className="p-2 text-right align-top">
                           <span className="text-sm font-bold text-primary block">
-                            ₹{((newItemRow.price || 0) * (newItemRow.quantity || 1)).toFixed(2)}
+                            ₹
+                            {(
+                              (newItemRow.price || 0) *
+                              bogoBillableQuantity(
+                                Number(newItemRow.quantity) || 1,
+                                newItemRow
+                              )
+                            ).toFixed(2)}
                           </span>
                         </td>
                         

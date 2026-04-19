@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SuperMart</string>
+    <string name="title_activity_main">SuperMart</string>
+    <string name="package_name">com.supermart.app</string>
+    <string name="custom_url_scheme">com.supermart.app</string>
+</resources>
