@@ -2,7 +2,7 @@
 FROM node:22-alpine AS frontend-builder
 
 # Enable corepack for pnpm support
-RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.19.0 --activate
 
 WORKDIR /Super_Market/frontend
 
@@ -16,7 +16,7 @@ RUN pnpm run build
 FROM node:22-alpine AS backend-builder
 
 # Enable corepack for pnpm support
-RUN corepack enable && corepack prepare pnpm@10.22.0 --activate
+RUN corepack enable && corepack prepare pnpm@10.19.0 --activate
 
 WORKDIR /Super_Market/backend
 
