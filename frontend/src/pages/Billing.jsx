@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Plus, Save, Trash2, X, Loader2, Receipt, ScanBarcode, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -77,8 +78,57 @@ const bogoQuantityIncrement = (item = {}) => (itemHasBogoOffer(item) ? 2 : 1);
  * Buy-one-get-one-free: amount scales with physical qty ÷ 2 (half the units are “paid”).
  * e.g. rate ₹700, qty 2 → ₹700; qty 1 → ₹350.
  */
+/** Minimum quantity after blur / commit (allows fractional weight, etc.). */
+const MIN_BILL_LINE_QUANTITY = 0.001;
+
+/** Parse line quantity for totals and API; treats trailing "n." as n for interim display. */
+const lineQuantityNumber = (q) => {
+  if (q === "" || q === null || q === undefined) return 0;
+  if (typeof q === "string" && /^\d+\.$/.test(q.trim())) {
+    return Number.parseFloat(q);
+  }
+  const n = Number.parseFloat(q);
+  return Number.isFinite(n) ? n : 0;
+};
+
+const clampBillQuantityCommit = (raw) => {
+  const n = lineQuantityNumber(raw);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.max(MIN_BILL_LINE_QUANTITY, n);
+};
+
+const samePriceForManualMerge = (a, b) =>
+  Math.abs((Number(a) || 0) - (Number(b) || 0)) < 0.0005;
+
+/**
+ * Whether an existing bill line is the same product as a manual-add row (merge qty instead of new line).
+ * — Both non-empty SKUs (case-insensitive) must match, or differ → no match.
+ * — Otherwise same trimmed name + same rate (and SKUs compatible: at most one side set, or both empty).
+ */
+const manualLineMatchesPending = (line, pending) => {
+  const lineSku = String(line.sku ?? "").trim().toLowerCase();
+  const pendingSku = String(pending.sku ?? "").trim().toLowerCase();
+  const lineName = String(line.name ?? "").trim().toLowerCase();
+  const pendingName = String(pending.name ?? "").trim().toLowerCase();
+
+  if (!pendingName) return false;
+
+  if (pendingSku && lineSku && pendingSku !== lineSku) {
+    return false;
+  }
+  if (pendingSku && lineSku) {
+    return pendingSku === lineSku;
+  }
+
+  if (!samePriceForManualMerge(line.price, pending.price)) {
+    return false;
+  }
+
+  return pendingName === lineName;
+};
+
 const bogoBillableQuantity = (physicalQty, line = {}) => {
-  const qty = Number.parseInt(physicalQty, 10);
+  const qty = lineQuantityNumber(physicalQty);
   if (!Number.isFinite(qty) || qty <= 0) return 0;
   if (!itemHasBogoOffer(line)) return qty;
   return qty / 2;
@@ -162,6 +212,7 @@ const buildBillDraft = (index) => {
     isSaving: false,
     isSaved: false,
     savedBillNo: null,
+    savedBillId: null,
     error: null,
     isCustomerLookupLoading: false
   };
@@ -206,7 +257,7 @@ const getTabColorClasses = (billNumber) => {
 
 const getBillTotals = (bill) => {
   const subtotal = bill.items.reduce((sum, line) => {
-    const qty = Number.parseInt(line.quantity, 10);
+    const qty = lineQuantityNumber(line.quantity);
     const price = Number(line.price) || 0;
     if (!Number.isFinite(qty) || qty <= 0) return sum;
     const billable = bogoBillableQuantity(qty, line);
@@ -292,7 +343,10 @@ const loadSavedState = () => {
             sku: line.sku,
             price: Number(line.price || 0),
             mrp: Number(line.mrp || 0),
-            quantity: Number.isFinite(line.quantity) ? line.quantity : 1,
+            quantity: (() => {
+              const q = lineQuantityNumber(line.quantity);
+              return q > 0 ? q : 1;
+            })(),
             hsnCode: line.hsnCode || "",
             gstRate: Number(line.gstRate || 0),
             batch: line.batch || "",
@@ -323,6 +377,70 @@ const createInitialState = () => {
   };
 };
 
+/** Build a POS bill tab from a full bill returned by GET /bills/:id (for Update bills flow). */
+const draftTabFromApiBill = (bill) => {
+  const labelIndex = 1;
+  const base = buildBillDraft(labelIndex);
+  const billId = Number(bill?.id ?? bill?._id);
+  const items = Array.isArray(bill?.items) ? bill.items : [];
+
+  const lines = items.map((it, idx) => {
+    const itemId = it.itemId ?? it.item_id ?? null;
+    const code = (it.itemCode ?? it.item_code ?? it.sku ?? "").toString().trim();
+    const sourceId =
+      itemId != null && String(itemId).trim() !== ""
+        ? String(itemId)
+        : code || `imported-${idx}`;
+
+    return {
+      lineId: `line-${createId()}`,
+      sourceId,
+      name: (it.itemName ?? it.item_name ?? it.name ?? "Item").toString().trim() || "Item",
+      sku: code,
+      price: Number(it.unitPrice ?? it.price ?? it.sellingPrice ?? 0) || 0,
+      mrp: Number.isFinite(Number(it.mrp)) && Number(it.mrp) >= 0 ? Number(it.mrp) : 0,
+      quantity: (() => {
+        const q = Number(it.quantity ?? 1);
+        return Number.isFinite(q) && q > 0 ? q : 1;
+      })(),
+      hsnCode: (it.hsnCode ?? it.hsn_code ?? "").toString(),
+      gstRate: Number(it.taxRate ?? it.tax_rate ?? 0) || 0,
+      batch: (it.batch ?? "").toString(),
+      cessAmount: Number(it.cessAmount ?? 0) || 0,
+      sgstAmount: undefined,
+      cgstAmount: undefined,
+      gstAmount: undefined,
+      bogoOffer: null,
+    };
+  });
+
+  const pm = String(bill?.paymentMethod ?? bill?.payment_method ?? "cash").toLowerCase();
+
+  return {
+    ...base,
+    id: `bill-${createId()}`,
+    customerName: (bill?.customerName ?? bill?.customer_name ?? "").toString(),
+    customerPhone: (bill?.customerPhone ?? bill?.customer_phone ?? "").toString(),
+    customerId: (bill?.customerId ?? bill?.customer_id ?? "").toString(),
+    customerEmail: (bill?.customerEmail ?? bill?.customer_email ?? "").toString(),
+    customerAddress: (bill?.customerAddress ?? bill?.customer_address ?? "").toString(),
+    customerGstin: (bill?.customerGstin ?? bill?.customer_gstin ?? "").toString(),
+    paymentMethod: normalizePaymentMethod(pm),
+    paymentStatus: (bill?.paymentStatus ?? bill?.payment_status ?? "paid").toString(),
+    discount: String(bill?.discount ?? 0),
+    tax: String(bill?.tax ?? 0),
+    transactionId: (bill?.transactionId ?? bill?.transaction_id ?? "").toString(),
+    notes: "",
+    items: lines,
+    savedBillId: Number.isFinite(billId) && billId > 0 ? billId : null,
+    savedBillNo: bill?.billNo ?? bill?.bill_no ?? null,
+    isSaved: true,
+    isSaving: false,
+    error: null,
+    isCustomerLookupLoading: false,
+  };
+};
+
 export default function Billing() {
   const initialStateRef = useRef(null);
   if (!initialStateRef.current) {
@@ -331,6 +449,8 @@ export default function Billing() {
   }
   const { toast } = useToast();
   const { selectedStore, user } = useAuth();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const [bills, setBills] = useState(initialStateRef.current.bills);
   const [activeBillId, setActiveBillId] = useState(
@@ -641,7 +761,7 @@ export default function Billing() {
   // Recalculate GST amounts when quantity or price changes in newItemRow
   useEffect(() => {
     if (newItemRow.name && newItemRow.gstRate !== undefined) {
-      const quantity = Number(newItemRow.quantity) || 1;
+      const quantity = lineQuantityNumber(newItemRow.quantity) || 1;
       const price = Number(newItemRow.price) || 0;
       const gstRate = Number(newItemRow.gstRate) || 0;
       const billableQty = bogoBillableQuantity(quantity, newItemRow);
@@ -910,20 +1030,21 @@ export default function Billing() {
     [toast]
   );
 
+  /** After a new bill is saved, close that tab and return to a fresh draft (original POS behaviour). */
   const closeBillAfterSave = useCallback(
-    (billId) => {
+    (savedTabId) => {
       setBills((prevBills) => {
         if (prevBills.length === 0) {
           return prevBills;
         }
 
-        if (prevBills.length === 1 && prevBills[0].id === billId) {
+        if (prevBills.length === 1 && prevBills[0].id === savedTabId) {
           const newBill = buildBillDraft(1);
           setActiveBillId(newBill.id);
           return [newBill];
         }
 
-        const filtered = prevBills.filter((bill) => bill.id !== billId);
+        const filtered = prevBills.filter((bill) => bill.id !== savedTabId);
         if (filtered.length === prevBills.length) {
           return prevBills;
         }
@@ -932,7 +1053,7 @@ export default function Billing() {
         const fallbackActiveId =
           renumbered[renumbered.length - 1]?.id ?? renumbered[0]?.id ?? "";
         setActiveBillId((current) =>
-          current === billId ? fallbackActiveId : current
+          current === savedTabId ? fallbackActiveId : current
         );
         return renumbered;
       });
@@ -984,15 +1105,21 @@ export default function Billing() {
 
       try {
         const response = await billsAPI.getCustomerByPhone(trimmed, {
-          storeId: selectedStore?.id
+          storeId: selectedStore?.id || selectedStore?._id
         });
         const customer =
           response?.data?.customer ??
           response?.customer ??
           response?.data ??
           null;
+        const isNew = Boolean(response?.data?.isNew);
 
         if (customer) {
+          const resolvedCustomerId = (() => {
+            const cid = customer.customerId ?? customer.id;
+            if (cid != null && cid !== "") return String(cid);
+            return trimmed;
+          })();
           updateBill(billId, (bill) => ({
             isCustomerLookupLoading: false,
             customerPhone: trimmed,
@@ -1000,7 +1127,7 @@ export default function Billing() {
             customerEmail: customer.customerEmail ?? bill.customerEmail ?? "",
             customerAddress: customer.customerAddress ?? bill.customerAddress ?? "",
             customerGstin: customer.customerGstin ?? bill.customerGstin ?? "",
-            customerId: customer.customerId ?? trimmed,
+            customerId: resolvedCustomerId,
             paymentMethod: bill.paymentMethod === 'credit'
               ? bill.paymentMethod
               : customer.paymentMethod ?? bill.paymentMethod,
@@ -1008,14 +1135,14 @@ export default function Billing() {
               (customer.paymentMethod ?? bill.paymentMethod) === 'credit'
                 ? 'pending'
                 : bill.paymentStatus ?? 'paid',
-            isSaved: false,
-            savedBillNo: null
           }));
           toast({
-            title: "Customer loaded",
-            description: customer.customerName
-              ? `Welcome back, ${customer.customerName}.`
-              : "Saved customer details applied."
+            title: isNew ? "New customer" : "Customer loaded",
+            description: isNew
+              ? "Details loaded from this phone. Add name and GSTIN if needed, then save the bill."
+              : customer.customerName
+                ? `Welcome back, ${customer.customerName}.`
+                : "Saved customer details applied."
           });
           focusBarcodeInput();
         } else {
@@ -1023,8 +1150,8 @@ export default function Billing() {
             isCustomerLookupLoading: false
           });
           toast({
-            title: "Customer not found",
-            description: "No saved customer details for this phone number.",
+            title: "Lookup failed",
+            description: "Could not load customer for this phone number.",
             variant: "destructive"
           });
           focusBarcodeInput();
@@ -1046,7 +1173,7 @@ export default function Billing() {
         focusBarcodeInput();
       }
     },
-    [selectedStore?.id, toast, updateBill, focusBarcodeInput]
+    [selectedStore?.id, selectedStore?._id, toast, updateBill, focusBarcodeInput]
   );
 
   const addItemToBill = (billId, item) => {
@@ -1059,7 +1186,7 @@ export default function Billing() {
         const delta = bogoQuantityIncrement(item);
         const updatedItems = bill.items.map((line, index) => {
           if (index !== existingIndex) return line;
-          const prev = Number.parseInt(line.quantity, 10);
+          const prev = lineQuantityNumber(line.quantity);
           const safe = Number.isFinite(prev) && prev > 0 ? prev : 1;
           return {
             ...line,
@@ -1071,8 +1198,6 @@ export default function Billing() {
         });
         return {
           items: updatedItems,
-          isSaved: false,
-          savedBillNo: null,
         };
       }
 
@@ -1096,21 +1221,20 @@ export default function Billing() {
 
       return {
         items: [...bill.items, newLine],
-        isSaved: false,
-        savedBillNo: null,
       };
     });
     focusBarcodeInput();
   };
 
   const updateItemQuantity = (billId, lineId, quantityValue) => {
-    // Allow empty value temporarily (for editing), but default to 1 if empty
     let quantity;
     if (quantityValue === "" || quantityValue === null || quantityValue === undefined) {
-      quantity = ""; // Allow empty during editing - don't convert to 1 yet
+      quantity = "";
+    } else if (typeof quantityValue === "string" && /^\d+\.$/.test(quantityValue.trim())) {
+      quantity = quantityValue.trim();
     } else {
-      const parsed = Number.parseInt(quantityValue, 10);
-      quantity = isNaN(parsed) ? "" : Math.max(1, parsed);
+      const parsed = Number.parseFloat(quantityValue);
+      quantity = !Number.isFinite(parsed) || parsed < 0 ? "" : parsed;
     }
     
     updateBill(billId, (bill) => ({
@@ -1126,8 +1250,6 @@ export default function Billing() {
             }
           : line
       ),
-      isSaved: false,
-      savedBillNo: null,
     }));
   };
 
@@ -1136,16 +1258,12 @@ export default function Billing() {
       items: bill.items.map((line) =>
         line.lineId === lineId ? { ...line, [field]: value } : line
       ),
-      isSaved: false,
-      savedBillNo: null,
     }));
   };
 
   const removeItemFromBill = (billId, lineId) => {
     updateBill(billId, (bill) => ({
       items: bill.items.filter((line) => line.lineId !== lineId),
-      isSaved: false,
-      savedBillNo: null,
     }));
   };
 
@@ -1159,29 +1277,87 @@ export default function Billing() {
       return;
     }
 
-    const newLine = {
-      lineId: `line-${createId()}`,
-      sourceId: newItemRow.sku || createId(),
+    const pendingSnapshot = {
+      sku: newItemRow.sku,
       name: newItemRow.name.trim(),
-      sku: newItemRow.sku || "",
       price: Number(newItemRow.price) || 0,
-      mrp: Number(newItemRow.mrp) || 0,
-      quantity: Number(newItemRow.quantity) || bogoDefaultQuantity(newItemRow),
-      hsnCode: newItemRow.hsnCode || "",
-      gstRate: Number(newItemRow.gstRate) || 0,
-      batch: newItemRow.batch || "",
-      cessAmount: Number(newItemRow.cessAmount) || 0,
-      sgstAmount: Number(newItemRow.sgstAmount) || 0,
-      cgstAmount: Number(newItemRow.cgstAmount) || 0,
-      gstAmount: Number(newItemRow.gstAmount) || 0,
-      bogoOffer: newItemRow.bogoOffer || null,
     };
 
-    updateBill(billId, (bill) => ({
-      items: [...bill.items, newLine],
-      isSaved: false,
-      savedBillNo: null,
-    }));
+    const addQty = (() => {
+      const qn = lineQuantityNumber(newItemRow.quantity);
+      return qn > 0
+        ? Math.max(MIN_BILL_LINE_QUANTITY, qn)
+        : bogoDefaultQuantity(newItemRow);
+    })();
+
+    const skuTrim = String(newItemRow.sku ?? "").trim();
+    const stableSourceId =
+      skuTrim ||
+      `manual:${pendingSnapshot.name.toLowerCase()}|${pendingSnapshot.price.toFixed(2)}`;
+
+    const bill = bills.find((b) => b.id === billId);
+    const premergeIndex = bill
+      ? bill.items.findIndex((line) => manualLineMatchesPending(line, pendingSnapshot))
+      : -1;
+    let toastTitle = "Item added";
+    let toastDescription = `${pendingSnapshot.name} added to the bill`;
+    if (premergeIndex >= 0 && bill) {
+      const line = bill.items[premergeIndex];
+      const prev = lineQuantityNumber(line.quantity);
+      const safe = Number.isFinite(prev) && prev > 0 ? prev : 0;
+      const nextQty = Number((safe + addQty).toFixed(4));
+      toastTitle = "Quantity updated";
+      toastDescription = `${pendingSnapshot.name}: total quantity is now ${nextQty}`;
+    }
+
+    updateBill(billId, (bill) => {
+      const existingIndex = bill.items.findIndex((line) =>
+        manualLineMatchesPending(line, pendingSnapshot)
+      );
+
+      if (existingIndex >= 0) {
+        const updatedItems = bill.items.map((line, index) => {
+          if (index !== existingIndex) return line;
+          const prev = lineQuantityNumber(line.quantity);
+          const safe = Number.isFinite(prev) && prev > 0 ? prev : 0;
+          const nextQty = Number((safe + addQty).toFixed(4));
+          return {
+            ...line,
+            quantity: nextQty,
+            sku: (line.sku && line.sku.trim()) || skuTrim || line.sku,
+            bogoOffer: line.bogoOffer ?? newItemRow.bogoOffer ?? null,
+            gstAmount: undefined,
+            sgstAmount: undefined,
+            cgstAmount: undefined,
+          };
+        });
+        return {
+          items: updatedItems,
+        };
+      }
+
+      const newLine = {
+        lineId: `line-${createId()}`,
+        sourceId: stableSourceId,
+        name: pendingSnapshot.name,
+        sku: skuTrim,
+        price: pendingSnapshot.price,
+        mrp: Number(newItemRow.mrp) || 0,
+        quantity: addQty,
+        hsnCode: newItemRow.hsnCode || "",
+        gstRate: Number(newItemRow.gstRate) || 0,
+        batch: newItemRow.batch || "",
+        cessAmount: Number(newItemRow.cessAmount) || 0,
+        sgstAmount: Number(newItemRow.sgstAmount) || 0,
+        cgstAmount: Number(newItemRow.cgstAmount) || 0,
+        gstAmount: Number(newItemRow.gstAmount) || 0,
+        bogoOffer: newItemRow.bogoOffer || null,
+      };
+
+      return {
+        items: [...bill.items, newLine],
+      };
+    });
 
     // Reset new item row
     setNewItemRow({
@@ -1201,8 +1377,8 @@ export default function Billing() {
     });
 
     toast({
-      title: "Item added",
-      description: `${newLine.name} added to the bill`,
+      title: toastTitle,
+      description: toastDescription,
     });
   };
 
@@ -1221,6 +1397,7 @@ export default function Billing() {
       paymentStatus: bill.paymentMethod === "credit" ? "pending" : "paid",
       isSaved: false,
       savedBillNo: null,
+      savedBillId: null,
       isCustomerLookupLoading: false
     }));
     focusBarcodeInput();
@@ -1291,7 +1468,7 @@ export default function Billing() {
 
     const itemsPayload = billToSave.items
       .map((line) => {
-        const quantity = Number.parseInt(line.quantity, 10);
+        const quantity = lineQuantityNumber(line.quantity);
         const unitPrice = Number.parseFloat(line.price);
 
         if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -1317,7 +1494,7 @@ export default function Billing() {
         // Build payload object, only including defined fields
         const payload = {
           name: itemName,
-          quantity,
+          quantity: Number(quantity.toFixed(4)),
           unitPrice: Number(unitPrice.toFixed(2)),
           sellingPrice: Number(unitPrice.toFixed(2)),
           total
@@ -1359,7 +1536,14 @@ export default function Billing() {
     updateBill(billId, { isSaving: true, error: null });
 
     const runSaveBill = async (transactionId) => {
-      const response = await billsAPI.createBill({
+      const existingSavedId = billToSave.savedBillId;
+      const isUpdate =
+        existingSavedId !== null &&
+        existingSavedId !== undefined &&
+        Number.isFinite(Number(existingSavedId)) &&
+        Number(existingSavedId) > 0;
+
+      const apiPayload = {
         storeId: selectedStore.id,
         date: localCalendarYmd(),
         customerName: trimmedCustomerName || undefined,
@@ -1376,34 +1560,57 @@ export default function Billing() {
         tax: Number(totals.tax.toFixed(2)),
         total: Number(totals.total.toFixed(2)),
         items: itemsPayload
-      });
+      };
 
-      const createdBill =
+      const response = isUpdate
+        ? await billsAPI.updateBill(Number(existingSavedId), apiPayload)
+        : await billsAPI.createBill(apiPayload);
+
+      const persistedBill =
         response?.data?.bill ??
         response?.bill ??
         response?.data ??
         response;
 
-      const assignedBillNo = createdBill?.billNo ?? createdBill?.bill_no;
+      const assignedBillNo = persistedBill?.billNo ?? persistedBill?.bill_no ?? billToSave.savedBillNo;
+      const numericBillId = Number(persistedBill?.id ?? persistedBill?.billId);
+      const nextSavedBillId =
+        Number.isFinite(numericBillId) && numericBillId > 0
+          ? numericBillId
+          : isUpdate
+            ? Number(existingSavedId)
+            : null;
 
-      updateBill(billId, {
-        isSaving: false,
-        isSaved: true,
-        paymentStatus,
-        savedBillNo: assignedBillNo ?? null,
-      });
+      if (isUpdate) {
+        updateBill(billId, {
+          isSaving: false,
+          isSaved: true,
+          paymentStatus,
+          savedBillNo: assignedBillNo ?? null,
+          savedBillId: nextSavedBillId,
+        });
+      } else {
+        updateBill(billId, {
+          isSaving: false,
+          paymentStatus,
+        });
+      }
 
       toast({
-        title: "Bill saved",
+        title: isUpdate ? "Bill updated" : "Bill saved",
         description: assignedBillNo
-          ? `Bill ${assignedBillNo} saved successfully.`
-          : "Bill saved successfully.",
+          ? isUpdate
+            ? `Bill ${assignedBillNo} updated successfully.`
+            : `Bill ${assignedBillNo} saved successfully.`
+          : isUpdate
+            ? "Bill updated successfully."
+            : "Bill saved successfully.",
       });
 
       try {
         const printableBill = await fetchBillDetails(
           {
-            billId: createdBill?.id ?? createdBill?.billId ?? null,
+            billId: nextSavedBillId ?? persistedBill?.id ?? persistedBill?.billId ?? null,
             billNo: assignedBillNo ?? null
           },
           { silent: true }
@@ -1448,7 +1655,9 @@ export default function Billing() {
                       ? Number(local.sellingPrice)
                       : Number.isFinite(Number(local?.price))
                         ? Number(local.price)
-                        : Number(isFinite(it.price) ? it.price : 0);
+                        : Number.isFinite(Number(it.price))
+                          ? Number(it.price)
+                          : 0;
               return {
                 ...it,
                 mrp,
@@ -1468,20 +1677,22 @@ export default function Billing() {
       } catch (printError) {
         console.warn("Unable to load bill for printing:", printError);
         addBillToRecent({
-          id: createdBill?.id ?? createdBill?.billId ?? null,
+          id: nextSavedBillId ?? persistedBill?.id ?? persistedBill?.billId ?? null,
           billNo: assignedBillNo ?? null,
           total: totals.total,
-          date: createdBill?.date ?? new Date().toISOString(),
-          paymentMethod: createdBill?.paymentMethod ?? billToSave.paymentMethod,
+          date: persistedBill?.date ?? new Date().toISOString(),
+          paymentMethod: persistedBill?.paymentMethod ?? billToSave.paymentMethod,
           totalSavings: totals.savings || 0,
           userName:
-            createdBill?.userName ??
-            createdBill?.billBy ??
-            createdBill?.cashierName ??
+            persistedBill?.userName ??
+            persistedBill?.billBy ??
+            persistedBill?.cashierName ??
             null
         });
       } finally {
-        closeBillAfterSave(billId);
+        if (!isUpdate) {
+          closeBillAfterSave(billId);
+        }
       }
     };
 
@@ -1604,6 +1815,97 @@ export default function Billing() {
       console.warn("Failed to persist billing state", error);
     }
   }, [bills, activeBillId]);
+
+  /** Open a bill for editing when navigated from Update bills (`state.editBillId`). */
+  useEffect(() => {
+    const rawId = location.state?.editBillId;
+    if (rawId === undefined || rawId === null || rawId === "") {
+      return;
+    }
+
+    const editId = Number(rawId);
+    if (!Number.isFinite(editId) || editId <= 0) {
+      navigate("/billing", { replace: true, state: {} });
+      return;
+    }
+
+    if (bills.length >= MAX_BILL_TABS) {
+      toast({
+        title: "Too many bills open",
+        description: `Close a tab first (maximum ${MAX_BILL_TABS}).`,
+        variant: "destructive",
+      });
+      navigate("/billing", { replace: true, state: {} });
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const res = await billsAPI.getBill(editId);
+        const bill = res?.data?.bill ?? res?.bill ?? res?.data;
+        if (!bill || cancelled) {
+          return;
+        }
+
+        const billStore = Number(bill.storeId ?? bill.store_id);
+        const currentStore = Number(selectedStore?.id ?? selectedStore?._id);
+        if (
+          Number.isFinite(billStore) &&
+          billStore > 0 &&
+          Number.isFinite(currentStore) &&
+          currentStore > 0 &&
+          billStore !== currentStore
+        ) {
+          toast({
+            title: "Different store",
+            description: "Switch the header store to match this bill, then try again.",
+            variant: "destructive",
+          });
+          navigate("/billing", { replace: true, state: {} });
+          return;
+        }
+
+        const draft = draftTabFromApiBill(bill);
+
+        setBills((prev) => {
+          if (prev.length >= MAX_BILL_TABS) {
+            toast({
+              title: "Too many bills open",
+              description: `Close a tab first (maximum ${MAX_BILL_TABS}).`,
+              variant: "destructive",
+            });
+            return prev;
+          }
+          return renumberBills([...prev, draft]);
+        });
+
+        setActiveBillId(draft.id);
+
+        toast({
+          title: "Bill loaded",
+          description: bill.billNo || bill.bill_no ? `Editing ${bill.billNo || bill.bill_no}` : "You can change lines and press Update bill.",
+        });
+      } catch (error) {
+        const description =
+          error.response?.data?.message ?? error.message ?? "Unable to load that bill.";
+        toast({
+          title: "Could not open bill",
+          description,
+          variant: "destructive",
+        });
+      } finally {
+        if (!cancelled) {
+          navigate("/billing", { replace: true, state: {} });
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.state, navigate, selectedStore, toast, bills.length]);
 
   const handleBarcodeSubmit = async (event) => {
     event.preventDefault();
@@ -1728,11 +2030,11 @@ export default function Billing() {
               <Receipt className="h-5 w-5 sm:h-6 sm:w-6 shrink-0" />
               Billing
             </h1>
-            {activeBill?.savedBillNo && (
+            {activeBill?.savedBillId && activeBill?.savedBillNo ? (
               <span className="text-xs sm:text-sm bg-primary-foreground/20 px-2 py-0.5 sm:px-3 sm:py-1 rounded-full shrink-0">
-                Bill #{activeBill.savedBillNo}
+                Editing #{activeBill.savedBillNo}
               </span>
-            )}
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 min-w-0">
             <Button
@@ -1901,7 +2203,7 @@ export default function Billing() {
                     </thead>
                     <tbody>
                       {activeBill?.items.map((line, index) => {
-                        const qtyNum = Number.parseInt(line.quantity, 10);
+                        const qtyNum = lineQuantityNumber(line.quantity);
                         const safeQty = Number.isFinite(qtyNum) && qtyNum > 0 ? qtyNum : 0;
                         const billableQty = bogoBillableQuantity(safeQty, line);
                         const baseAmount = Number(line.price || 0) * billableQty;
@@ -1952,33 +2254,36 @@ export default function Billing() {
                             <td className="p-2 text-center">
                               <Input
                                 type="number"
-                                min="1"
-                                step="1"
+                                min={MIN_BILL_LINE_QUANTITY}
+                                step="any"
                                 value={line.quantity === "" || line.quantity === null || line.quantity === undefined ? "" : line.quantity}
                                 onChange={(event) => {
                                   const value = event.target.value;
-                                  // Allow empty value during editing - user can clear with backspace
                                   if (value === "") {
                                     updateItemQuantity(activeBillId, line.lineId, "");
                                     return;
                                   }
+                                  const trimmed = value.trim();
+                                  if (/^\d+\.$/.test(trimmed)) {
+                                    updateItemQuantity(activeBillId, line.lineId, trimmed);
+                                    return;
+                                  }
                                   const quantity = Number(value);
-                                  if (!isNaN(quantity) && quantity >= 1) {
+                                  if (!Number.isNaN(quantity) && quantity >= 0) {
                                     updateItemQuantity(activeBillId, line.lineId, quantity);
                                   }
                                 }}
                                 onBlur={(event) => {
                                   const value = event.target.value;
-                                  // Ensure minimum of 1 when field loses focus
-                                  const quantity = Math.max(1, Number(value) || 1);
+                                  const quantity = clampBillQuantityCommit(value);
                                   updateItemQuantity(activeBillId, line.lineId, quantity);
                                 }}
-                                className="w-20 h-8 text-center mx-auto"
+                                className="w-24 h-8 text-center mx-auto"
                                 onKeyDown={(event) => {
                                   if (event.key === "Enter") {
                                     event.preventDefault();
                                     const value = event.target.value;
-                                    const quantity = Math.max(1, Number(value) || 1);
+                                    const quantity = clampBillQuantityCommit(value);
                                     updateItemQuantity(activeBillId, line.lineId, quantity);
                                     event.currentTarget.blur();
                                   }
@@ -2365,32 +2670,35 @@ export default function Billing() {
                           <Input
                             ref={quantityInputRef}
                             type="number"
-                            min="1"
-                            step="1"
+                            min={MIN_BILL_LINE_QUANTITY}
+                            step="any"
                             value={newItemRow.quantity === "" || newItemRow.quantity === null || newItemRow.quantity === undefined ? "" : newItemRow.quantity}
                             onChange={(event) => {
                               const value = event.target.value;
-                              // Allow empty value during editing - user can clear with backspace
                               if (value === "") {
                                 setNewItemRow({ ...newItemRow, quantity: "" });
                                 return;
                               }
+                              const trimmed = value.trim();
+                              if (/^\d+\.$/.test(trimmed)) {
+                                setNewItemRow({ ...newItemRow, quantity: trimmed });
+                                return;
+                              }
                               const numValue = Number(value);
-                              if (!isNaN(numValue) && numValue >= 1) {
+                              if (!Number.isNaN(numValue) && numValue >= 0) {
                                 setNewItemRow({ ...newItemRow, quantity: numValue });
                               }
                             }}
                             onBlur={(event) => {
                               const value = event.target.value;
-                              // Ensure minimum of 1 when field loses focus
-                              const quantity = Math.max(1, Number(value) || 1);
+                              const quantity = clampBillQuantityCommit(value);
                               setNewItemRow({ ...newItemRow, quantity });
                             }}
-                            className="w-20 h-8 text-center mx-auto"
+                            className="w-24 h-8 text-center mx-auto"
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
-                                const quantity = Math.max(1, Number(newItemRow.quantity) || 1);
+                                const quantity = clampBillQuantityCommit(newItemRow.quantity);
                                 if (newItemRow.name && newItemRow.name.trim()) {
                                   setNewItemRow({ ...newItemRow, quantity });
                                   addManualItem(activeBillId);
@@ -2561,7 +2869,7 @@ export default function Billing() {
                             {(
                               (newItemRow.price || 0) *
                               bogoBillableQuantity(
-                                Number(newItemRow.quantity) || 1,
+                                lineQuantityNumber(newItemRow.quantity) || 1,
                                 newItemRow
                               )
                             ).toFixed(2)}
@@ -2702,6 +3010,31 @@ export default function Billing() {
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
+                  <label className="text-sm font-medium flex items-center gap-2">
+                    Customer Phone {activeBill?.paymentMethod === "credit" && <span className="text-destructive">*</span>}
+                    {activeBill?.isCustomerLookupLoading && (
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden />
+                    )}
+                  </label>
+                  <Input
+                    placeholder="Enter phone number, then press Enter"
+                    value={activeBill?.customerPhone ?? ""}
+                    onChange={(e) => updateBill(activeBillId, { customerPhone: e.target.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        prefillCustomerByPhone(activeBillId, activeBill?.customerPhone);
+                      }
+                    }}
+                    disabled={activeBill?.isCustomerLookupLoading}
+                    className="w-full"
+                    autoComplete="tel"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Press Enter to load saved details from the database, or create a new customer record for this number.
+                  </p>
+                </div>
+                <div className="space-y-2">
                   <label className="text-sm font-medium">Customer Name {activeBill?.paymentMethod === "credit" && <span className="text-destructive">*</span>}</label>
                   <Input
                     placeholder="Enter customer name"
@@ -2711,22 +3044,48 @@ export default function Billing() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Customer Phone {activeBill?.paymentMethod === "credit" && <span className="text-destructive">*</span>}</label>
+                  <label className="text-sm font-medium">Email</label>
                   <Input
-                    placeholder="Enter phone number"
-                    value={activeBill?.customerPhone ?? ""}
-                    onChange={(e) => updateBill(activeBillId, { customerPhone: e.target.value })}
+                    type="email"
+                    placeholder="customer@example.com"
+                    value={activeBill?.customerEmail ?? ""}
+                    onChange={(e) => updateBill(activeBillId, { customerEmail: e.target.value })}
                     className="w-full"
+                    autoComplete="email"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Address</label>
+                  <Input
+                    placeholder="Billing / shipping address"
+                    value={activeBill?.customerAddress ?? ""}
+                    onChange={(e) => updateBill(activeBillId, { customerAddress: e.target.value })}
+                    className="w-full"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">GSTIN</label>
+                  <Input
+                    placeholder="15-character GSTIN (e.g. 22AAAAA0000A1Z5)"
+                    value={activeBill?.customerGstin ?? ""}
+                    onChange={(e) =>
+                      updateBill(activeBillId, {
+                        customerGstin: e.target.value.toUpperCase().replace(/[^0-9A-Z]/g, "")
+                      })
+                    }
+                    maxLength={15}
+                    className="w-full font-mono tracking-wide"
+                    autoComplete="off"
                   />
                 </div>
               </CardContent>
             </Card>
           </div>
 
-          {/* Footer - Create Bill Button */}
-          <div className="border-t p-3 sm:p-4 md:p-6 bg-background">
+          {/* Footer — Create bill (default POS). "Update bill" only when editing an existing bill (e.g. from Update bills). */}
+          <div className="border-t p-3 sm:p-4 md:p-6 bg-background space-y-3">
             {activeBill?.error && (
-              <p className="text-sm text-destructive mb-3">{activeBill.error}</p>
+              <p className="text-sm text-destructive">{activeBill.error}</p>
             )}
             <Button
               onClick={() => handleSaveBill(activeBillId)}
@@ -2737,12 +3096,12 @@ export default function Billing() {
               {activeBill?.isSaving ? (
                 <>
                   <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                  Creating Bill...
+                  {activeBill?.savedBillId ? "Updating bill..." : "Creating bill..."}
                 </>
               ) : (
                 <>
                   <Save className="h-5 w-5 mr-2" />
-                  Create Bill
+                  {activeBill?.savedBillId ? "Update bill" : "Create bill"}
                 </>
               )}
             </Button>

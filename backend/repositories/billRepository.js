@@ -383,6 +383,66 @@ const reduceStockForBillItem = async (connection, item, storeId) => {
   }
 };
 
+/** Add stock back (inverse of reduce) when replacing or removing bill lines. */
+const restoreStockForBillItem = async (connection, item, storeId) => {
+  const quantity = Number(item.quantity ?? 0);
+  if (quantity <= 0) {
+    return;
+  }
+
+  const identifier = await findItemIdentifier(connection, item.itemId, item.itemCode);
+  if (!identifier.source) {
+    console.warn(
+      `⚠️ Could not find item for stock restore: ${item.itemName || 'Unknown'} (itemId: ${item.itemId}, sku: ${item.itemCode})`
+    );
+    return;
+  }
+
+  const storeIdNum = Number(storeId);
+
+  try {
+    if (identifier.source === 'items' && identifier.itemId) {
+      await connection.query(
+        `UPDATE inventories 
+         SET qty_on_hand = COALESCE(qty_on_hand, 0) + ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE item_id = ? AND store_id = ?`,
+        [quantity, identifier.itemId, storeIdNum]
+      );
+    } else if (identifier.source === 'products' && identifier.productCode) {
+      await connection.query(
+        `UPDATE Products 
+         SET TotalStock = COALESCE(TotalStock, 0) + ?
+         WHERE ProductCode = ?`,
+        [quantity, identifier.productCode]
+      );
+      await connection.query(
+        `UPDATE store_inventory 
+         SET qty_on_hand = COALESCE(qty_on_hand, 0) + ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE product_code = ? AND store_id = ?`,
+        [quantity, identifier.productCode, storeIdNum]
+      );
+    } else if (identifier.source === 'appliance' && identifier.applianceId) {
+      await connection.query(
+        `UPDATE appliance 
+         SET qty_on_hand = CAST(COALESCE(qty_on_hand, 0) AS SIGNED) + CAST(? AS SIGNED)
+         WHERE appliance_id = ?`,
+        [quantity, identifier.applianceId]
+      );
+      await connection.query(
+        `UPDATE appliance_store_inventory 
+         SET qty_on_hand = COALESCE(qty_on_hand, 0) + ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE appliance_id = ? AND store_id = ?`,
+        [quantity, identifier.applianceId, storeIdNum]
+      );
+    }
+  } catch (error) {
+    console.error(`❌ Error restoring stock for item ${item.itemName || 'Unknown'}:`, error.message);
+  }
+};
+
 const BILL_NUMBER_PREFIX = 'B202501';
 const BILL_SEQUENCE_PAD = 3;
 /** Retries when two cashiers save at once and both read the same MAX sequence. */
@@ -454,7 +514,7 @@ const CREATE_BILL_ITEMS_TABLE_SQL = `
     item_id BIGINT UNSIGNED NULL,
     item_code VARCHAR(50) NULL,
     item_name VARCHAR(200) NOT NULL,
-    quantity INT UNSIGNED NOT NULL,
+    quantity DECIMAL(14, 4) NOT NULL,
     unit_price DECIMAL(12, 2) NOT NULL,
     mrp DECIMAL(12, 2) NULL DEFAULT NULL,
     subtotal DECIMAL(12, 2) NOT NULL,
@@ -563,8 +623,21 @@ const ensureBillingTablesExist = async () => {
             `ALTER TABLE bill_items ADD COLUMN mrp DECIMAL(12, 2) NULL DEFAULT NULL AFTER unit_price`
           );
         }
+        const qtyType = await query(
+          `SELECT DATA_TYPE
+           FROM information_schema.COLUMNS
+           WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'bill_items' AND COLUMN_NAME = 'quantity'`
+        );
+        if (Array.isArray(qtyType) && qtyType.length > 0) {
+          const dataType = String(qtyType[0].DATA_TYPE || '').toLowerCase();
+          if (dataType === 'int' || dataType === 'tinyint' || dataType === 'smallint' || dataType === 'mediumint' || dataType === 'bigint') {
+            await query(
+              `ALTER TABLE bill_items MODIFY COLUMN quantity DECIMAL(14, 4) NOT NULL`
+            );
+          }
+        }
       } catch (err) {
-        console.warn('Failed to add bill_items.mrp column:', err);
+        console.warn('Failed to migrate bill_items table (mrp / quantity):', err);
       }
     }
   })().catch((error) => {
@@ -746,6 +819,59 @@ export const getBillById = async (billId, { includeItems = true } = {}) => {
   return mapBill(rows[0], items);
 };
 
+const normalizeBillItemsFromRequestItems = (items) => {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  return items
+    .map((item) => {
+      const quantity = Number.parseFloat(item.quantity);
+      const unitPrice = Number.parseFloat(item.unitPrice ?? item.price);
+      if (!Number.isFinite(quantity) || quantity <= 0) {
+        return null;
+      }
+      if (!Number.isFinite(unitPrice) || unitPrice < 0) {
+        return null;
+      }
+
+      const discountValue = Number.isFinite(Number.parseFloat(item.discount))
+        ? Number.parseFloat(item.discount)
+        : 0;
+      const taxRateValue = Number.isFinite(Number.parseFloat(item.taxRate))
+        ? Number.parseFloat(item.taxRate)
+        : 0;
+      const bogoLabel = String(item.bogoOffer ?? item.bogo_offer ?? '').trim();
+      const billableQty = bogoLabel ? quantity / 2 : quantity;
+      const subtotalValue = Number((billableQty * unitPrice).toFixed(2));
+      const discountApplied = Number(Math.max(discountValue, 0).toFixed(2));
+      const totalValue = Number(Math.max(subtotalValue - discountApplied, 0).toFixed(2));
+
+      const parsedItemId = (() => {
+        const possibleId = item.itemId ?? item.item_id ?? item.sourceId;
+        const numberId = Number.parseInt(possibleId, 10);
+        return Number.isFinite(numberId) && numberId > 0 ? numberId : null;
+      })();
+
+      const mrpValue =
+        Number.isFinite(Number(item.mrp)) && Number(item.mrp) >= 0
+          ? Number(Number(item.mrp).toFixed(2))
+          : null;
+      return {
+        itemId: parsedItemId,
+        itemCode: item.itemCode ?? item.item_code ?? item.sku ?? null,
+        itemName: item.itemName ?? item.name ?? 'Unnamed Item',
+        quantity,
+        unitPrice: Number(unitPrice.toFixed(2)),
+        mrp: mrpValue,
+        subtotal: subtotalValue,
+        discount: discountApplied,
+        taxRate: Number(taxRateValue.toFixed(2)),
+        total: totalValue
+      };
+    })
+    .filter(Boolean);
+};
+
 export const createBill = async ({
   billNo,
   storeId,
@@ -827,54 +953,7 @@ export const createBill = async ({
       throw new Error('Unable to allocate a unique bill number after several attempts.');
     }
 
-    const normalizedItems = Array.isArray(items)
-      ? items
-        .map((item) => {
-          const quantity = Number.parseInt(item.quantity, 10);
-          const unitPrice = Number.parseFloat(item.unitPrice ?? item.price);
-          if (!Number.isFinite(quantity) || quantity <= 0) {
-            return null;
-          }
-          if (!Number.isFinite(unitPrice) || unitPrice < 0) {
-            return null;
-          }
-
-          const discountValue = Number.isFinite(Number.parseFloat(item.discount))
-            ? Number.parseFloat(item.discount)
-            : 0;
-          const taxRateValue = Number.isFinite(Number.parseFloat(item.taxRate))
-            ? Number.parseFloat(item.taxRate)
-            : 0;
-          const bogoLabel = String(item.bogoOffer ?? item.bogo_offer ?? '').trim();
-          const billableQty = bogoLabel ? quantity / 2 : quantity;
-          const subtotalValue = Number((billableQty * unitPrice).toFixed(2));
-          const discountApplied = Number(Math.max(discountValue, 0).toFixed(2));
-          const totalValue = Number(Math.max(subtotalValue - discountApplied, 0).toFixed(2));
-
-          const parsedItemId = (() => {
-            const possibleId = item.itemId ?? item.item_id ?? item.sourceId;
-            const numberId = Number.parseInt(possibleId, 10);
-            return Number.isFinite(numberId) && numberId > 0 ? numberId : null;
-          })();
-
-          const mrpValue = Number.isFinite(Number(item.mrp)) && Number(item.mrp) >= 0
-            ? Number(Number(item.mrp).toFixed(2))
-            : null;
-          return {
-            itemId: parsedItemId,
-            itemCode: item.itemCode ?? item.item_code ?? item.sku ?? null,
-            itemName: item.itemName ?? item.name ?? 'Unnamed Item',
-            quantity,
-            unitPrice: Number(unitPrice.toFixed(2)),
-            mrp: mrpValue,
-            subtotal: subtotalValue,
-            discount: discountApplied,
-            taxRate: Number(taxRateValue.toFixed(2)),
-            total: totalValue
-          };
-        })
-        .filter(Boolean)
-      : [];
+    const normalizedItems = normalizeBillItemsFromRequestItems(items);
 
     if (normalizedItems.length > 0) {
       const placeholders = normalizedItems
@@ -976,6 +1055,196 @@ export const createBill = async ({
 
     const billItems = (itemsRows?.[0] ?? []).map(mapBillItem);
 
+    return mapBill(rows[0], billItems);
+  });
+};
+
+export const updateBill = async (
+  billId,
+  {
+    storeId,
+    customerId,
+    customerName,
+    customerPhone,
+    customerEmail,
+    customerAddress,
+    customerGstin,
+    paymentMethod,
+    paymentStatus,
+    transactionId,
+    subtotal = 0,
+    tax = 0,
+    discount = 0,
+    total = 0,
+    items = []
+  }
+) => {
+  await ensureBillingTablesExist();
+
+  return transaction(async (connection) => {
+    const [existingRows] = await connection.query('SELECT id, store_id FROM bills WHERE id = ? LIMIT 1', [
+      billId
+    ]);
+    if (!Array.isArray(existingRows) || existingRows.length === 0) {
+      throw new Error('Bill not found');
+    }
+    if (Number(existingRows[0].store_id) !== Number(storeId)) {
+      throw new Error('Bill does not belong to this store');
+    }
+
+    const [oldRows] = await connection.query(
+      `SELECT item_id, item_code, item_name, quantity FROM bill_items WHERE bill_id = ?`,
+      [billId]
+    );
+    const oldLines = Array.isArray(oldRows) ? oldRows : [];
+    for (const row of oldLines) {
+      await restoreStockForBillItem(
+        connection,
+        {
+          itemId: row.item_id,
+          itemCode: row.item_code,
+          itemName: row.item_name,
+          quantity: Number(row.quantity ?? 0)
+        },
+        storeId
+      );
+    }
+
+    await connection.query('DELETE FROM bill_items WHERE bill_id = ?', [billId]);
+
+    const normalizedItems = normalizeBillItemsFromRequestItems(items);
+    if (normalizedItems.length === 0) {
+      throw new Error('At least one bill line is required');
+    }
+
+    const placeholders = normalizedItems.map(() => '(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').join(', ');
+    const values = normalizedItems.flatMap((item) => [
+      billId,
+      item.itemId,
+      item.itemCode,
+      item.itemName,
+      item.quantity,
+      item.unitPrice,
+      item.mrp,
+      item.subtotal,
+      item.discount,
+      item.taxRate,
+      item.total
+    ]);
+
+    await connection.query(
+      `INSERT INTO bill_items (
+          bill_id,
+          item_id,
+          item_code,
+          item_name,
+          quantity,
+          unit_price,
+          mrp,
+          subtotal,
+          discount,
+          tax_rate,
+          total
+        ) VALUES ${placeholders}`,
+      values
+    );
+
+    for (const item of normalizedItems) {
+      await reduceStockForBillItem(connection, item, storeId);
+    }
+
+    await connection.query(
+      `UPDATE bills SET
+          customer_id = ?,
+          customer_name = ?,
+          customer_phone = ?,
+          customer_email = ?,
+          customer_address = ?,
+          customer_gstin = ?,
+          payment_method = ?,
+          payment_status = ?,
+          transaction_id = ?,
+          subtotal = ?,
+          tax = ?,
+          discount = ?,
+          total = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?`,
+      [
+        customerId || null,
+        customerName || null,
+        customerPhone || null,
+        customerEmail || null,
+        customerAddress || null,
+        customerGstin || null,
+        paymentMethod || 'cash',
+        paymentStatus || 'paid',
+        transactionId || null,
+        subtotal,
+        tax,
+        discount,
+        total,
+        billId
+      ]
+    );
+
+    const [rows] = await connection.query(
+      `SELECT b.id,
+              b.bill_no,
+              b.store_id,
+              b.user_id,
+              u.first_name AS user_first_name,
+              u.last_name AS user_last_name,
+              u.email AS user_email,
+              b.date,
+              DATE_FORMAT(b.date, '%Y-%m-%d') AS bill_date_ymd,
+              b.customer_id,
+              b.customer_name,
+              b.customer_phone,
+              b.customer_email,
+              b.customer_address,
+              b.customer_gstin,
+              b.payment_method,
+              b.payment_status,
+              b.transaction_id,
+              b.subtotal,
+              b.tax,
+              b.discount,
+              b.total,
+              b.created_at,
+              b.updated_at
+       FROM bills b
+       LEFT JOIN users u ON b.user_id = u.id
+       WHERE b.id = ?
+       LIMIT 1`,
+      [billId]
+    );
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new Error('Bill not found after update');
+    }
+
+    const itemsTableExists = await checkItemsTableExists(connection);
+    const itemsRows = await connection.query(
+      itemsTableExists
+        ? `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+                COALESCE(NULLIF(bi.mrp, 0), i.mrp, P.MRP, 0) AS mrp,
+                bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at
+           FROM bill_items bi
+           LEFT JOIN items i ON (i.id = bi.item_id OR (bi.item_id IS NULL AND i.item_code = bi.item_code))
+           LEFT JOIN Products P ON P.ProductCode = bi.item_code
+           WHERE bi.bill_id = ?
+           ORDER BY bi.id ASC`
+        : `SELECT bi.id, bi.bill_id, bi.item_id, bi.item_code, bi.item_name, bi.quantity, bi.unit_price,
+                COALESCE(NULLIF(bi.mrp, 0), P.MRP, 0) AS mrp,
+                bi.subtotal, bi.discount, bi.tax_rate, bi.total, bi.created_at
+           FROM bill_items bi
+           LEFT JOIN Products P ON P.ProductCode = bi.item_code
+           WHERE bi.bill_id = ?
+           ORDER BY bi.id ASC`,
+      [billId]
+    );
+
+    const billItems = (itemsRows?.[0] ?? []).map(mapBillItem);
     return mapBill(rows[0], billItems);
   });
 };

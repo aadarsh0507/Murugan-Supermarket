@@ -530,6 +530,13 @@ export const billsAPI = {
     });
   },
 
+  updateBill: async (billId, billData) => {
+    return await apiRequest(`/bills/${billId}`, {
+      method: 'PUT',
+      body: JSON.stringify(billData),
+    });
+  },
+
   // Razorpay (UPI) – get public key for checkout
   getRazorpayKey: async () => {
     const res = await apiRequest('/bills/razorpay/key');

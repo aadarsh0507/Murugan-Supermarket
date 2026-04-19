@@ -47,11 +47,17 @@ export const createPurchaseOrder = async (req, res) => {
       });
     }
 
+    const createdByDisplayName =
+      [req.user?.firstName, req.user?.lastName].filter(Boolean).join(' ').trim() ||
+      (req.user?.email && String(req.user.email).trim()) ||
+      null;
+
     const purchaseOrder = await createPurchaseOrderRepo({
       supplier: req.body.supplier,
       store: resolvedStoreId,
       orderDate: req.body.orderDate,
       expectedDeliveryDate: req.body.expectedDeliveryDate,
+      invoiceNumber: req.body.invoiceNumber ?? req.body.invoice_number,
       items: req.body.items,
       tax: req.body.tax,
       discount: req.body.discount,
@@ -59,6 +65,8 @@ export const createPurchaseOrder = async (req, res) => {
       partialPayment: req.body.partialPayment,
       isCredit: req.body.isCredit,
       notes: req.body.notes,
+      createdByUserId: req.user?.id ?? req.user?._id ?? null,
+      createdByDisplayName,
     });
 
     res.status(201).json({
@@ -133,6 +141,7 @@ export const updatePurchaseOrder = async (req, res) => {
       store: resolvedStoreId || req.body.store, // Use resolved store or keep original if provided
       orderDate: req.body.orderDate,
       expectedDeliveryDate: req.body.expectedDeliveryDate,
+      invoiceNumber: req.body.invoiceNumber ?? req.body.invoice_number,
       items: req.body.items,
       tax: req.body.tax,
       discount: req.body.discount,

@@ -26,6 +26,7 @@ import Subcategories from "./pages/Subcategories";
 import Brands from "./pages/Brands";
 import NotFound from "./pages/NotFound";
 import Billing from "./pages/Billing";
+import BillUpdateList from "./pages/BillUpdateList";
 import UserRights from "./pages/UserRights";
 import { SCREEN_KEY_TO_ID } from "./constants/screens";
 
@@ -97,6 +98,14 @@ const App = () => (
               element={
                 <ProtectedRoute screenId={SCREEN_KEY_TO_ID["billing"]}>
                   <Layout><Billing /></Layout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/billing/update"
+              element={
+                <ProtectedRoute screenId={SCREEN_KEY_TO_ID["billing"]}>
+                  <Layout><BillUpdateList /></Layout>
                 </ProtectedRoute>
               }
             />

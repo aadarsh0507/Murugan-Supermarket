@@ -30,11 +30,8 @@ import { format } from "date-fns";
 
 const PAYMENT_METHODS = [
   { value: "cash", label: "Cash" },
-  { value: "card", label: "Card" },
   { value: "upi", label: "UPI" },
   { value: "credit", label: "Credit" },
-  { value: "online", label: "Online" },
-  { value: "other", label: "Other" },
 ];
 
 /** PO / billing credit payment rows — newest first */

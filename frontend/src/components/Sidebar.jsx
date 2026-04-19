@@ -1,4 +1,4 @@
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import {
   LayoutDashboard,
   Users,
@@ -13,13 +13,14 @@ import {
   Store,
   CreditCard,
   Receipt,
+  FilePen,
   ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
-import { SCREEN_LOOKUP, SCREEN_ORDER } from "@/constants/screens";
+import { SCREEN_LOOKUP, SCREEN_ORDER, SCREEN_KEY_TO_ID } from "@/constants/screens";
 import { SyncToGlobalButton } from "@/components/SyncToGlobalButton";
 
 const SCREEN_ICON_MAP = {
@@ -54,6 +55,7 @@ const navItems = SCREEN_ORDER.map((screenKey) => {
 
 export function Sidebar({ onClose }) {
   const [collapsed, setCollapsed] = useState(false);
+  const location = useLocation();
   const { hasScreenAccess } = useAuth();
 
   const visibleItems = navItems.filter((item) =>
@@ -96,6 +98,26 @@ export function Sidebar({ onClose }) {
                   <span className="font-medium truncate">{item.label}</span>
                 )}
               </NavLink>
+
+              {!collapsed && item.screenKey === "billing" && hasScreenAccess(SCREEN_KEY_TO_ID["billing"]) && (
+                <div className="mt-1 pl-2 border-l-2 border-muted ml-3">
+                  <NavLink
+                    to="/billing/update"
+                    onClick={handleNavClick}
+                    className={() =>
+                      cn(
+                        "flex items-center gap-2 px-3 py-2 rounded-md text-sm transition-colors",
+                        "hover:bg-accent/50 touch-target",
+                        location.pathname === "/billing/update" &&
+                          "bg-primary/15 text-primary font-medium"
+                      )
+                    }
+                  >
+                    <FilePen className="h-4 w-4 flex-shrink-0" />
+                    <span className="truncate">Update bills</span>
+                  </NavLink>
+                </div>
+              )}
 
               {/* Place Sync button directly after the Reports nav item on the left sidebar */}
               {!collapsed && item.screenKey === "reports" && (

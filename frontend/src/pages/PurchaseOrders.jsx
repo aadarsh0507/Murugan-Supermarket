@@ -53,6 +53,13 @@ function parseDateSafe(isoStr) {
   }
 }
 
+/** Treat blank price fields as 0 for math; keep '' in state for empty inputs */
+const priceToNumber = (v) => {
+  if (v === "" || v === null || v === undefined) return 0;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+};
+
 const EMPTY_ITEM_TEMPLATE = {
   particulars: "",
   sku: "",
@@ -60,17 +67,15 @@ const EMPTY_ITEM_TEMPLATE = {
   itemId: "",
   categoryName: "",
   subcategoryName: "",
-  batchNumber: "",
-  hsnNumber: "",
-  expiryDate: "",
   poQty: 0,
   discountType: '%',
   disPercent: 0,
   dis: 0,
-  taxPercent: 0,
-  price: 0,
+  taxPercent: "",
+  purchasePrice: "",
+  costPrice: "",
+  salesPrice: "",
   total: 0,
-  mrp: 0
 };
 
 const createEmptyItem = () => ({ ...EMPTY_ITEM_TEMPLATE });
@@ -103,14 +108,13 @@ const PurchaseOrders = () => {
   const [currentPOId, setCurrentPOId] = useState(null);
   const [highlightedRowIndex, setHighlightedRowIndex] = useState(null);
   const [barcodeScannerValue, setBarcodeScannerValue] = useState('');
-  const [openExpiryDateRowIndex, setOpenExpiryDateRowIndex] = useState(null);
-
   const [formData, setFormData] = useState({
     supplier: "",
     supplierName: "",
     supplierDetails: null, // Store full supplier details
     store: "",
     quotationDate: new Date().toISOString().split('T')[0],
+    invoiceNumber: "",
     validDate: "",
     dueDate: "",
     items: [createEmptyItem()],
@@ -434,13 +438,20 @@ const PurchaseOrders = () => {
     items[index] = { ...items[index], [field]: value };
 
     // Auto-calculate total based on discount type
-    if (field === 'poQty' || field === 'price' || field === 'disPercent' || field === 'dis' || field === 'taxPercent' || field === 'discountType') {
+    if (
+      field === 'poQty' ||
+      field === 'purchasePrice' ||
+      field === 'disPercent' ||
+      field === 'dis' ||
+      field === 'taxPercent' ||
+      field === 'discountType'
+    ) {
       const poQty = items[index].poQty || 0;
-      const price = items[index].price || 0;
+      const price = priceToNumber(items[index].purchasePrice);
       const disPercent = items[index].disPercent || 0;
       const dis = items[index].dis || 0;
       const discountType = items[index].discountType || '%';
-      const taxPercent = items[index].taxPercent || 0;
+      const taxPercent = priceToNumber(items[index].taxPercent);
 
       // Calculate discount based on type
       let totalDiscountAmount = 0;
@@ -592,19 +603,41 @@ const PurchaseOrders = () => {
     }
 
     // Populate the target row (index is already the correct row - new row created in searchItems if needed)
+    const listCost = Number(suggestion.cost || 0);
+    const listSale = Number(suggestion.price || suggestion.sellingPrice || 0);
+    const pickPrice = (n) => (Number.isFinite(n) && n > 0 ? n : "");
+    const purchaseVal = pickPrice(listCost || listSale);
+    const costVal = pickPrice(listCost || listSale);
+    const salesVal = pickPrice(listSale || listCost);
     items[index] = {
       ...items[index],
       particulars: suggestion.name || suggestion.itemName || '',
       sku: suggestion.sku || '',
       unit: suggestion.unit || '',
-      price: suggestion.cost || suggestion.price || 0,
-      mrp: suggestion.price || 0,
+      purchasePrice: purchaseVal,
+      costPrice: costVal,
+      salesPrice: salesVal,
       itemId: suggestion._id || '',
       categoryName: suggestion.category || '',
       subcategoryName: suggestion.subcategory || '',
-      hsnNumber: suggestion.hsnCode || suggestion.hsnNumber || '',
-      // Attempt to set a default tax if available via tags
     };
+    const poQty = items[index].poQty || 0;
+    const unitPurchase = priceToNumber(items[index].purchasePrice);
+    const disPercent = items[index].disPercent || 0;
+    const dis = items[index].dis || 0;
+    const discountType = items[index].discountType || '%';
+    const taxPercent = priceToNumber(items[index].taxPercent);
+    const subtotalBeforeDiscount = poQty * unitPurchase;
+    let totalDiscountAmount = 0;
+    if (discountType === '%') {
+      totalDiscountAmount = (subtotalBeforeDiscount * disPercent) / 100;
+    } else {
+      totalDiscountAmount = dis;
+    }
+    const subtotalAfterDiscount = subtotalBeforeDiscount - totalDiscountAmount;
+    const totalTaxAmount = (subtotalAfterDiscount * taxPercent) / 100;
+    items[index].total = subtotalAfterDiscount + totalTaxAmount;
+
     setFormData({ ...formData, items });
     calculateTotals(items);
     setOpenSuggestIndex(null);
@@ -701,18 +734,21 @@ const PurchaseOrders = () => {
   const calculateTotals = (items) => {
     const totalItems = items.length;
     const totalQty = items.reduce((sum, item) => sum + (item.poQty || 0), 0);
-    const price = items.reduce((sum, item) => sum + ((item.poQty || 0) * (item.price || 0)), 0);
+    const price = items.reduce(
+      (sum, item) => sum + ((item.poQty || 0) * priceToNumber(item.purchasePrice)),
+      0
+    );
 
     // Calculate total discount across all items based on discount type
     const discount = items.reduce((sum, item) => {
       const poQty = item.poQty || 0;
-      const price = item.price || 0;
+      const unitPurchase = priceToNumber(item.purchasePrice);
       const discountType = item.discountType || '%';
       const disPercent = item.disPercent || 0;
       const dis = item.dis || 0;
-      const taxPercent = item.taxPercent || 0;
+      const taxPercent = priceToNumber(item.taxPercent);
 
-      const subtotalBeforeDiscount = poQty * price;
+      const subtotalBeforeDiscount = poQty * unitPurchase;
 
       let totalDiscountAmount = 0;
       if (discountType === '%') {
@@ -726,13 +762,13 @@ const PurchaseOrders = () => {
 
     const totalTax = items.reduce((sum, item) => {
       const poQty = item.poQty || 0;
-      const price = item.price || 0;
+      const unitPurchase = priceToNumber(item.purchasePrice);
       const discountType = item.discountType || '%';
       const disPercent = item.disPercent || 0;
       const dis = item.dis || 0;
-      const taxPercent = item.taxPercent || 0;
+      const taxPercent = priceToNumber(item.taxPercent);
 
-      const subtotalBeforeDiscount = poQty * price;
+      const subtotalBeforeDiscount = poQty * unitPurchase;
 
       let totalDiscountAmount = 0;
       if (discountType === '%') {
@@ -786,53 +822,20 @@ const PurchaseOrders = () => {
       return null;
     }
 
-    // Validate: batch number is required for all items
-    for (let i = 0; i < validItems.length; i++) {
-      const it = validItems[i];
-      const batch = (it.batchNumber || '').trim();
-      if (batch === "") {
-        toast({
-          title: "Batch Number Required",
-          description: `Batch number is required for item: ${it.particulars || it.sku || 'Item ' + (i + 1)}`,
-          variant: "destructive",
-        });
-        return null;
-      }
-    }
-
-    // Validate: batch number must be unique per same item (allow same batch across different items)
-    const seenByItem = new Map(); // key: item identity -> Set(batchNumber)
-    for (let i = 0; i < validItems.length; i++) {
-      const it = validItems[i];
-      const itemIdentity = (it.sku && it.sku.trim() !== "") ? `sku:${it.sku.trim()}` : `name:${(it.particulars || '').trim().toLowerCase()}`;
-      const batch = (it.batchNumber || '').trim();
-      if (!seenByItem.has(itemIdentity)) {
-        seenByItem.set(itemIdentity, new Set());
-      }
-      const batches = seenByItem.get(itemIdentity);
-      if (batches.has(batch)) {
-        toast({
-          title: "Duplicate Batch Number",
-          description: `Batch '${batch}' is repeated for the same item (${it.particulars || it.sku}). Each item's batches must be unique.`,
-          variant: "destructive",
-        });
-        return null;
-      }
-      batches.add(batch);
-    }
-
     const poData = {
       supplier: data.supplier,
       store: data.store,
       orderDate: data.quotationDate,
+      invoiceNumber: (data.invoiceNumber || "").trim() || null,
       // Only include expectedDeliveryDate if it has a value
       ...(data.dueDate && data.dueDate.trim() !== "" && { expectedDeliveryDate: data.dueDate }),
       items: validItems.map(item => {
         const itemData = {
           itemName: item.particulars,
           quantity: item.poQty,
-          costPrice: item.price,
-          total: item.total
+          purchasePrice: priceToNumber(item.purchasePrice),
+          costPrice: priceToNumber(item.costPrice),
+          total: item.total,
         };
 
         // Include itemId if available
@@ -843,9 +846,6 @@ const PurchaseOrders = () => {
         if (item.unit && item.unit.trim() !== "") itemData.unit = item.unit;
         if (item.categoryName && item.categoryName.trim() !== "") itemData.categoryName = item.categoryName;
         if (item.subcategoryName && item.subcategoryName.trim() !== "") itemData.subcategoryName = item.subcategoryName;
-        if (item.batchNumber && item.batchNumber.trim() !== "") itemData.batchNumber = item.batchNumber;
-        if (item.hsnNumber && item.hsnNumber.trim() !== "") itemData.hsnNumber = item.hsnNumber;
-        if (item.expiryDate && item.expiryDate.trim() !== "") itemData.expiryDate = item.expiryDate;
 
         // Include discount and tax fields
         if (item.discountType) itemData.discountType = item.discountType;
@@ -854,12 +854,12 @@ const PurchaseOrders = () => {
         } else if (item.discountType === 'Rate' && item.dis !== undefined && item.dis !== null) {
           itemData.discountAmount = Number(item.dis) || 0;
         }
-        if (item.taxPercent !== undefined && item.taxPercent !== null) {
-          itemData.taxPercent = Number(item.taxPercent) || 0;
+        if (item.taxPercent !== undefined && item.taxPercent !== null && item.taxPercent !== "") {
+          itemData.taxPercent = priceToNumber(item.taxPercent);
+        } else {
+          itemData.taxPercent = 0;
         }
-        if (item.mrp !== undefined && item.mrp !== null) {
-          itemData.mrp = Number(item.mrp) || 0;
-        }
+        itemData.mrp = priceToNumber(item.salesPrice);
 
         return itemData;
       }),
@@ -1082,6 +1082,7 @@ const PurchaseOrders = () => {
       supplierDetails: null,
       store: selectedStore?._id ?? selectedStore?.id ?? "",
       quotationDate: new Date().toISOString().split('T')[0],
+      invoiceNumber: "",
       validDate: "",
       dueDate: "",
       referenceDate: "",
@@ -1654,7 +1655,7 @@ const PurchaseOrders = () => {
         <CardHeader className="px-3 py-4 sm:px-6 sm:py-6">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between min-w-0">
             <CardTitle className="text-xl sm:text-2xl text-red-600 flex items-center gap-2 min-w-0 truncate">
-              PURCHASE
+              Purchase entry
             </CardTitle>
             <div className="flex flex-wrap gap-2 shrink-0">
               <Button type="submit" form="poForm" variant="default" size="sm" disabled={saving} className="min-w-0">
@@ -1683,8 +1684,8 @@ const PurchaseOrders = () => {
                 {loadError}
               </div>
             )}
-            {/* Minimal fields: Supplier, Store, Purchase Order Date */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+            {/* Minimal fields: Supplier, Store, date, invoice number */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
               <div>
                 <Label>Supplier Name</Label>
                 <Select
@@ -1756,7 +1757,7 @@ const PurchaseOrders = () => {
                 </Select>
               </div>
               <div>
-                <Label>Purchase Order Date</Label>
+                <Label>Date</Label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -1782,6 +1783,20 @@ const PurchaseOrders = () => {
                     />
                   </PopoverContent>
                 </Popover>
+              </div>
+              <div>
+                <Label htmlFor="po-invoice-number">Invoice number</Label>
+                <Input
+                  id="po-invoice-number"
+                  type="text"
+                  maxLength={100}
+                  placeholder="Optional"
+                  value={formData.invoiceNumber}
+                  onChange={(e) =>
+                    setFormData((prev) => ({ ...prev, invoiceNumber: e.target.value }))
+                  }
+                  className="h-10"
+                />
               </div>
             </div>
           </CardContent>
@@ -1846,7 +1861,7 @@ const PurchaseOrders = () => {
               </div>
               <div className="flex items-center gap-2 min-w-0">
                 <Tag className="h-5 w-5 text-purple-500 shrink-0" />
-                <span className="text-sm truncate">Price: <strong>₹{Math.round(formData.price)}</strong></span>
+                <span className="text-sm truncate">Purchase: <strong>₹{Math.round(formData.price)}</strong></span>
               </div>
               <div className="flex items-center gap-2 min-w-0">
                 <Percent className="h-5 w-5 text-orange-500 shrink-0" />
@@ -1938,21 +1953,19 @@ const PurchaseOrders = () => {
               </div>
             </div>
             <div className="border rounded-lg w-full overflow-x-auto overflow-y-visible">
-              <Table className="w-full table-auto min-w-[1400px]">
+              <Table className="w-full table-auto min-w-[1500px]">
                 <TableHeader className="bg-blue-600 text-white">
                   <TableRow>
                     <TableHead className="text-white w-10"><input type="checkbox" /></TableHead>
                     <TableHead className="text-white w-56">PARTICULARS</TableHead>
                     <TableHead className="text-white w-16">Qty</TableHead>
-                    <TableHead className="text-white w-20">Batch No.</TableHead>
-                    <TableHead className="text-white w-16">HSN</TableHead>
-                    <TableHead className="text-white w-24">Expiry Date</TableHead>
+                    <TableHead className="text-white min-w-[7rem]">Purchase price</TableHead>
+                    <TableHead className="text-white min-w-[7rem]">Cost price</TableHead>
+                    <TableHead className="text-white min-w-[7rem]">Sales</TableHead>
                     <TableHead className="text-white w-20">Disc Type</TableHead>
                     <TableHead className="text-white w-14">DIS</TableHead>
-                    <TableHead className="text-white w-14">TAX%</TableHead>
-                    <TableHead className="text-white w-16">PRICE</TableHead>
+                    <TableHead className="text-white min-w-[6rem]">Tax %</TableHead>
                     <TableHead className="text-white w-16">TOTAL</TableHead>
-                    <TableHead className="text-white w-16">MRP</TableHead>
                     <TableHead className="text-white w-12">ACTION</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -2161,56 +2174,71 @@ const PurchaseOrders = () => {
                           className="w-full"
                         />
                       </TableCell>
-                      <TableCell className="min-w-[8rem]">
-                        <Input
-                          type="text"
-                          value={item.batchNumber || ''}
-                          onChange={(e) => updateItem(index, 'batchNumber', e.target.value)}
-                          placeholder="Batch No. *"
-                          className="w-full"
-                          required
-                        />
+                      <TableCell className="min-w-[7rem]">
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={item.purchasePrice === "" || item.purchasePrice == null ? "" : item.purchasePrice}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") {
+                                updateItem(index, "purchasePrice", "");
+                              } else {
+                                const n = parseFloat(raw);
+                                updateItem(index, "purchasePrice", Number.isNaN(n) ? "" : n);
+                              }
+                            }}
+                            placeholder=""
+                            className="w-full pl-6"
+                          />
+                        </div>
                       </TableCell>
                       <TableCell className="min-w-[7rem]">
-                        <Input
-                          type="text"
-                          value={item.hsnNumber || ''}
-                          onChange={(e) => updateItem(index, 'hsnNumber', e.target.value)}
-                          placeholder="HSN Code"
-                          className="w-full"
-                        />
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={item.costPrice === "" || item.costPrice == null ? "" : item.costPrice}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") {
+                                updateItem(index, "costPrice", "");
+                              } else {
+                                const n = parseFloat(raw);
+                                updateItem(index, "costPrice", Number.isNaN(n) ? "" : n);
+                              }
+                            }}
+                            placeholder=""
+                            className="w-full pl-6"
+                          />
+                        </div>
                       </TableCell>
-                      <TableCell className="relative">
-                        <Popover
-                          open={openExpiryDateRowIndex === index}
-                          onOpenChange={(open) => setOpenExpiryDateRowIndex(open ? index : null)}
-                        >
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className={`w-full max-w-[8.5rem] justify-start text-left font-normal h-9 px-2 ${!item.expiryDate ? "text-muted-foreground" : ""}`}
-                            >
-                              <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0 opacity-70" />
-                              <span className="truncate">{formatDateDisplay(item.expiryDate)}</span>
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0" align="start" sideOffset={4}>
-                            <Calendar
-                              mode="single"
-                              selected={parseDateSafe(item.expiryDate)}
-                              defaultMonth={parseDateSafe(item.expiryDate) || undefined}
-                              onSelect={(date) => {
-                                if (date) {
-                                  updateItem(index, 'expiryDate', format(date, "yyyy-MM-dd"));
-                                } else {
-                                  updateItem(index, 'expiryDate', '');
-                                }
-                                setOpenExpiryDateRowIndex(null);
-                              }}
-                              initialFocus
-                            />
-                          </PopoverContent>
-                        </Popover>
+                      <TableCell className="min-w-[7rem]">
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={item.salesPrice === "" || item.salesPrice == null ? "" : item.salesPrice}
+                            onChange={(e) => {
+                              const raw = e.target.value;
+                              if (raw === "") {
+                                updateItem(index, "salesPrice", "");
+                              } else {
+                                const n = parseFloat(raw);
+                                updateItem(index, "salesPrice", Number.isNaN(n) ? "" : n);
+                              }
+                            }}
+                            placeholder=""
+                            className="w-full pl-6"
+                          />
+                        </div>
                       </TableCell>
                       <TableCell className="min-w-[8rem]">
                         <Select
@@ -2255,46 +2283,28 @@ const PurchaseOrders = () => {
                         )}
                       </TableCell>
                       <TableCell className="min-w-[7rem]">
-                        <Select value={String(item.taxPercent)} onValueChange={(v) => updateItem(index, 'taxPercent', parseFloat(v))}>
+                        <Select
+                          value={
+                            item.taxPercent === "" || item.taxPercent == null
+                              ? undefined
+                              : String(item.taxPercent)
+                          }
+                          onValueChange={(v) => updateItem(index, "taxPercent", parseFloat(v) || 0)}
+                        >
                           <SelectTrigger className="w-full">
-                            <SelectValue />
+                            <SelectValue placeholder="Tax %" />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="0">0%</SelectItem>
                             <SelectItem value="5">5%</SelectItem>
-                            <SelectItem value="12">12%</SelectItem>
                             <SelectItem value="18">18%</SelectItem>
                             <SelectItem value="28">28%</SelectItem>
                           </SelectContent>
                         </Select>
                       </TableCell>
-                      <TableCell className="min-w-[8rem]">
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
-                          <Input
-                            type="text"
-                            value={item.price || ''}
-                            readOnly
-                            tabIndex={-1}
-                            className="w-full pl-6 bg-slate-100 text-slate-900"
-                          />
-                        </div>
-                      </TableCell>
                       <TableCell className="font-medium min-w-[7rem]">
                         <div className="rounded-md border px-3 py-2 bg-slate-50 text-slate-900">
                           ₹{Math.round(item.total)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="min-w-[8rem]">
-                        <div className="relative">
-                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
-                          <Input
-                            type="text"
-                            value={item.mrp || ''}
-                            readOnly
-                            tabIndex={-1}
-                            className="w-full pl-6 bg-slate-100 text-slate-900"
-                          />
                         </div>
                       </TableCell>
                       <TableCell>

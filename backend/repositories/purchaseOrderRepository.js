@@ -374,6 +374,7 @@ const ensureTables = async () => {
         store_id VARCHAR(100) NULL,
         order_date DATETIME NOT NULL,
         expected_delivery_date DATETIME NULL,
+        invoice_number VARCHAR(100) NULL,
         total_items INT UNSIGNED NOT NULL DEFAULT 0,
         total_quantity INT UNSIGNED NOT NULL DEFAULT 0,
         subtotal DECIMAL(12, 2) NOT NULL DEFAULT 0,
@@ -385,6 +386,8 @@ const ensureTables = async () => {
         is_credit BOOLEAN NOT NULL DEFAULT FALSE,
         status ENUM('created','ordered','received','cancelled') NOT NULL DEFAULT 'created',
         notes TEXT NULL,
+        created_by_user_id BIGINT UNSIGNED NULL,
+        created_by_display_name VARCHAR(255) NULL,
         created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         PRIMARY KEY (id)
@@ -407,6 +410,7 @@ const ensureTables = async () => {
         expiry_date DATE NULL,
         quantity INT UNSIGNED NOT NULL DEFAULT 0,
         cost_price DECIMAL(12, 2) NOT NULL DEFAULT 0,
+        purchase_price DECIMAL(12, 2) NOT NULL DEFAULT 0,
         total DECIMAL(12, 2) NOT NULL DEFAULT 0,
         discount_type VARCHAR(10) NULL DEFAULT '%',
         discount_percent DECIMAL(5, 2) NULL DEFAULT 0,
@@ -468,6 +472,10 @@ const ensureTables = async () => {
     await addColumnIfNotExists('discount_amount', 'discount_amount DECIMAL(12, 2) NULL DEFAULT 0 AFTER discount_percent');
     await addColumnIfNotExists('tax_percent', 'tax_percent DECIMAL(5, 2) NULL DEFAULT 0 AFTER discount_amount');
     await addColumnIfNotExists('mrp', 'mrp DECIMAL(12, 2) NULL DEFAULT 0 AFTER tax_percent');
+    await addColumnIfNotExists(
+      'purchase_price',
+      'purchase_price DECIMAL(12, 2) NOT NULL DEFAULT 0 AFTER cost_price'
+    );
 
     await query(`
       CREATE TABLE IF NOT EXISTS purchase_order_barcodes (
@@ -510,6 +518,54 @@ const ensureTables = async () => {
         console.warn('Could not add is_credit column:', error.message);
       }
     }
+
+    try {
+      const invoiceCols = await query(`
+        SELECT COLUMN_NAME 
+        FROM INFORMATION_SCHEMA.COLUMNS 
+        WHERE TABLE_SCHEMA = DATABASE() 
+        AND TABLE_NAME = 'purchase_orders' 
+        AND COLUMN_NAME = 'invoice_number'
+      `);
+
+      if (!invoiceCols || invoiceCols.length === 0) {
+        await query(`
+          ALTER TABLE purchase_orders 
+          ADD COLUMN invoice_number VARCHAR(100) NULL
+        `);
+        console.log('✅ Added invoice_number column to purchase_orders table');
+      }
+    } catch (error) {
+      if (!error.message.includes('Duplicate column name')) {
+        console.warn('Could not add invoice_number column:', error.message);
+      }
+    }
+
+    for (const meta of [
+      { name: 'created_by_user_id', def: 'BIGINT UNSIGNED NULL' },
+      { name: 'created_by_display_name', def: 'VARCHAR(255) NULL' },
+    ]) {
+      try {
+        const cols = await query(
+          `
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = DATABASE()
+            AND TABLE_NAME = 'purchase_orders'
+            AND COLUMN_NAME = ?
+        `,
+          [meta.name]
+        );
+        if (!cols || cols.length === 0) {
+          await query(`ALTER TABLE purchase_orders ADD COLUMN ${meta.name} ${meta.def}`);
+          console.log(`✅ Added ${meta.name} to purchase_orders`);
+        }
+      } catch (error) {
+        if (!error.message?.includes('Duplicate column name')) {
+          console.warn(`Could not add ${meta.name}:`, error.message);
+        }
+      }
+    }
   })().catch((error) => {
     ensureTablesPromise = undefined;
     throw error;
@@ -520,35 +576,145 @@ const ensureTables = async () => {
 
 const mapPurchaseOrderRow = (row) => {
   if (!row) return null;
+  const supplierLabel =
+    row.supplier_name != null && String(row.supplier_name).trim() !== ''
+      ? String(row.supplier_name).trim()
+      : null;
+  const createdByDisplay =
+    row.created_by_display_name != null && String(row.created_by_display_name).trim() !== ''
+      ? String(row.created_by_display_name).trim()
+      : null;
+  const totalAmt = Number(row.total_amount ?? 0);
   return {
     _id: String(row.id),
     poNumber: row.po_number,
     supplierId: row.supplier_id,
-    supplierName: row.supplier_name,
+    supplierName: supplierLabel,
+    supplier: (() => {
+      const hasId = row.supplier_id != null && String(row.supplier_id).trim() !== "";
+      if (!hasId && !supplierLabel) return null;
+      return {
+        _id: row.supplier_id != null ? String(row.supplier_id) : "",
+        companyName: supplierLabel,
+      };
+    })(),
     storeId: row.store_id,
     orderDate: row.order_date,
     expectedDeliveryDate: row.expected_delivery_date,
+    invoiceNumber: row.invoice_number != null ? String(row.invoice_number) : '',
     totalItems: Number(row.total_items ?? 0),
     totalQuantity: Number(row.total_quantity ?? 0),
     subtotal: Number(row.subtotal ?? 0),
     discount: Number(row.discount ?? 0),
     tax: Number(row.tax ?? 0),
     shipping: Number(row.shipping ?? 0),
-    totalAmount: Number(row.total_amount ?? 0),
+    totalAmount: totalAmt,
+    total: totalAmt,
     partialPayment: Number(row.partial_payment ?? 0),
     isCredit: Boolean(row.is_credit ?? false),
     status: row.status,
     notes: row.notes,
+    createdBy: createdByDisplay
+      ? { firstName: createdByDisplay, lastName: '', email: null }
+      : null,
+    createdByUserId: row.created_by_user_id != null ? String(row.created_by_user_id) : null,
+    createdByDisplayName: createdByDisplay,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+};
+
+const normalizeInvoiceNumberForDb = (value) => {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim();
+  return s ? s.slice(0, 100) : null;
+};
+
+/** Resolve supplier display name from legacy Suppliers / suppliers table by SUPPLIERCODE. */
+const fetchSupplierNameByCode = async (connection, supplierCode) => {
+  if (supplierCode === undefined || supplierCode === null) return null;
+  const code = String(supplierCode).trim();
+  if (!code) return null;
+  const runSelect = async (sql, params) => {
+    if (connection?.query) {
+      const [rows] = await connection.query(sql, params);
+      return rows;
+    }
+    return query(sql, params);
+  };
+  for (const table of ['Suppliers', 'suppliers']) {
+    try {
+      const list = await runSelect(
+        `SELECT NAME AS n FROM \`${table}\` WHERE SUPPLIERCODE = ? LIMIT 1`,
+        [code]
+      );
+      if (list?.length && list[0].n != null && String(list[0].n).trim() !== '') {
+        return String(list[0].n).trim();
+      }
+    } catch {
+      /* table or column mismatch */
+    }
+  }
+  return null;
+};
+
+const resolveSupplierNameForDb = async (connection, supplier) => {
+  if (supplier && typeof supplier === 'object') {
+    const n = supplier.name ?? supplier.companyName;
+    if (n != null && String(n).trim() !== '') return String(n).trim();
+  }
+  const id = supplier?.id ?? supplier?._id ?? supplier;
+  return fetchSupplierNameByCode(connection, id);
+};
+
+/** Fill supplier_name on in-memory rows when missing (for reports / older POs). */
+const enrichRowsWithSupplierNames = async (rows) => {
+  if (!Array.isArray(rows) || rows.length === 0) return rows;
+  const needIds = [
+    ...new Set(
+      rows
+        .filter((r) => r?.supplier_id != null && String(r.supplier_id).trim() !== '')
+        .filter((r) => r.supplier_name == null || String(r.supplier_name).trim() === '')
+        .map((r) => String(r.supplier_id).trim())
+    ),
+  ];
+  if (needIds.length === 0) return rows;
+  const placeholders = needIds.map(() => '?').join(',');
+  const nameById = new Map();
+  for (const table of ['Suppliers', 'suppliers']) {
+    try {
+      const found = await query(
+        `SELECT SUPPLIERCODE AS id, NAME AS n FROM \`${table}\` WHERE SUPPLIERCODE IN (${placeholders})`,
+        needIds
+      );
+      if (Array.isArray(found)) {
+        for (const row of found) {
+          if (row.id != null && row.n != null) {
+            nameById.set(String(row.id).trim(), String(row.n).trim());
+          }
+        }
+      }
+      if (nameById.size > 0) break;
+    } catch {
+      /* try next table name */
+    }
+  }
+  if (nameById.size === 0) return rows;
+  return rows.map((r) => {
+    const sid = r?.supplier_id != null ? String(r.supplier_id).trim() : '';
+    if (!sid) return r;
+    const hasName = r.supplier_name != null && String(r.supplier_name).trim() !== '';
+    if (hasName) return r;
+    const nm = nameById.get(sid);
+    return nm ? { ...r, supplier_name: nm } : r;
+  });
 };
 
 const fetchPurchaseOrderItems = async (purchaseOrderId) => {
   const rows = await query(
     `SELECT id, purchase_order_id, line_index, item_id, item_name, sku, unit, category_name,
             subcategory_name, batch_number, hsn_number, expiry_date, quantity,
-            cost_price, total, discount_type, discount_percent, discount_amount,
+            cost_price, purchase_price, total, discount_type, discount_percent, discount_amount,
             tax_percent, mrp, created_at
      FROM purchase_order_items
      WHERE purchase_order_id = ?
@@ -571,6 +737,7 @@ const fetchPurchaseOrderItems = async (purchaseOrderId) => {
     expiryDate: row.expiry_date,
     quantity: Number(row.quantity ?? 0),
     costPrice: Number(row.cost_price ?? 0),
+    purchasePrice: Number(row.purchase_price ?? row.cost_price ?? 0),
     total: Number(row.total ?? 0),
     discountType: row.discount_type || '%',
     discountPercent: Number(row.discount_percent ?? 0),
@@ -727,7 +894,7 @@ const ensurePurchaseOrderItemsColumns = async () => {
       { name: 'discount_percent', def: 'discount_percent DECIMAL(5, 2) NULL DEFAULT 0' },
       { name: 'discount_amount', def: 'discount_amount DECIMAL(12, 2) NULL DEFAULT 0' },
       { name: 'tax_percent', def: 'tax_percent DECIMAL(5, 2) NULL DEFAULT 0' },
-      { name: 'mrp', def: 'mrp DECIMAL(12, 2) NULL DEFAULT 0' }
+      { name: 'mrp', def: 'mrp DECIMAL(12, 2) NULL DEFAULT 0' },
     ];
 
     for (const col of columnsToAdd) {
@@ -765,10 +932,12 @@ const insertPurchaseOrderItems = async (connection, purchaseOrderId, items = [])
   const placeholders = [];
 
   items.forEach((item, index) => {
-    // 19 placeholders for 19 columns: purchase_order_id, line_index, item_id, item_name, sku, unit, 
-    // category_name, subcategory_name, batch_number, hsn_number, expiry_date, quantity, 
-    // cost_price, total, discount_type, discount_percent, discount_amount, tax_percent, mrp
-    placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    const purchaseUnit = Number(
+      item.purchasePrice ?? item.price ?? item.costPrice ?? 0
+    );
+    const costUnit = Number(item.costPrice ?? item.price ?? purchaseUnit ?? 0);
+    // 20 columns incl. purchase_price
+    placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     
     // Convert itemId to number if it exists
     const itemId = item.itemId ? Number(item.itemId) : null;
@@ -786,7 +955,8 @@ const insertPurchaseOrderItems = async (connection, purchaseOrderId, items = [])
       item.hsnNumber || null,
       item.expiryDate ? new Date(item.expiryDate) : null,
       Number(item.quantity ?? 0),
-      Number(item.costPrice ?? item.price ?? 0),
+      costUnit,
+      purchaseUnit,
       Number(item.total ?? 0),
       item.discountType || '%',
       Number(item.discountPercent ?? item.disPercent ?? 0),
@@ -811,6 +981,7 @@ const insertPurchaseOrderItems = async (connection, purchaseOrderId, items = [])
       expiry_date,
       quantity,
       cost_price,
+      purchase_price,
       total,
       discount_type,
       discount_percent,
@@ -835,6 +1006,8 @@ const insertBarcodes = async (connection, purchaseOrderId) => {
     const quantity = Math.max(Number(item.quantity ?? 0), 1);
     for (let seq = 0; seq < quantity; seq += 1) {
       placeholders.push('(?, ?, ?, ?, ?, ?, ?, ?)');
+      const labelAmount =
+        Number(item.mrp ?? 0) || Number(item.costPrice ?? 0);
       values.push(
         purchaseOrderId,
         itemIdx,
@@ -842,7 +1015,7 @@ const insertBarcodes = async (connection, purchaseOrderId) => {
         item.sku || null,
         item.batchNumber || null,
         item.expiryDate ? new Date(item.expiryDate) : null,
-        Number(item.costPrice ?? 0),
+        labelAmount,
         buildBarcodeValue(purchaseOrderId, itemIdx + 1, seq + 1)
       );
     }
@@ -881,6 +1054,7 @@ export const createPurchaseOrder = async ({
   store,
   orderDate,
   expectedDeliveryDate,
+  invoiceNumber,
   items = [],
   tax = 0,
   discount = 0,
@@ -888,6 +1062,8 @@ export const createPurchaseOrder = async ({
   partialPayment = 0,
   isCredit = false,
   notes = '',
+  createdByUserId = null,
+  createdByDisplayName = null,
 }) => {
   await ensureTables();
 
@@ -948,6 +1124,18 @@ export const createPurchaseOrder = async ({
     const shippingAmount = Number(shipping ?? 0);
     const partialPaymentAmount = Number(partialPayment ?? 0);
     const totalAmount = subtotal + taxAmount + shippingAmount - discountAmount;
+    const invoiceNum = normalizeInvoiceNumberForDb(invoiceNumber);
+    const supplierNameForDb = (await resolveSupplierNameForDb(connection, supplier)) ?? null;
+
+    let createdByUid = null;
+    if (createdByUserId != null && String(createdByUserId).trim() !== "") {
+      const n = Number.parseInt(String(createdByUserId), 10);
+      if (!Number.isNaN(n)) createdByUid = n;
+    }
+    const createdByDisp =
+      createdByDisplayName != null && String(createdByDisplayName).trim() !== ""
+        ? String(createdByDisplayName).trim().slice(0, 255)
+        : null;
 
     const [result] = await connection.execute(
       `INSERT INTO purchase_orders (
@@ -957,6 +1145,7 @@ export const createPurchaseOrder = async ({
         store_id,
         order_date,
         expected_delivery_date,
+        invoice_number,
         total_items,
         total_quantity,
         subtotal,
@@ -967,15 +1156,18 @@ export const createPurchaseOrder = async ({
         partial_payment,
         is_credit,
         status,
+        created_by_user_id,
+        created_by_display_name,
         notes
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         poNumber,
         supplier?.id ?? supplier?._id ?? supplier ?? null,
-        supplier?.name ?? supplier?.companyName ?? null,
+        supplierNameForDb,
         store ?? null,
         orderDate ? new Date(orderDate) : new Date(),
         expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
+        invoiceNum,
         totalItems,
         totalQuantity,
         subtotal,
@@ -985,7 +1177,9 @@ export const createPurchaseOrder = async ({
         totalAmount,
         partialPaymentAmount,
         Boolean(isCredit),
-        'created',
+        "created",
+        createdByUid,
+        createdByDisp,
         notes || null,
       ]
     );
@@ -1019,6 +1213,7 @@ export const updatePurchaseOrder = async (
     store,
     orderDate,
     expectedDeliveryDate,
+    invoiceNumber,
     items = [],
     tax = 0,
     discount = 0,
@@ -1069,6 +1264,8 @@ export const updatePurchaseOrder = async (
     const shippingAmount = Number(shipping ?? 0);
     const partialPaymentAmount = Number(partialPayment ?? 0);
     const totalAmount = subtotal + taxAmount + shippingAmount - discountAmount;
+    const invoiceNum = normalizeInvoiceNumberForDb(invoiceNumber);
+    const supplierNameForDb = (await resolveSupplierNameForDb(connection, supplier)) ?? null;
 
     await connection.execute(
       `UPDATE purchase_orders
@@ -1077,6 +1274,7 @@ export const updatePurchaseOrder = async (
            store_id = ?,
            order_date = ?,
            expected_delivery_date = ?,
+           invoice_number = ?,
            total_items = ?,
            total_quantity = ?,
            subtotal = ?,
@@ -1091,10 +1289,11 @@ export const updatePurchaseOrder = async (
        WHERE id = ?`,
       [
         supplier?.id ?? supplier?._id ?? supplier ?? null,
-        supplier?.name ?? supplier?.companyName ?? null,
+        supplierNameForDb,
         store ?? null,
         orderDate ? new Date(orderDate) : new Date(),
         expectedDeliveryDate ? new Date(expectedDeliveryDate) : null,
+        invoiceNum,
         totalItems,
         totalQuantity,
         subtotal,
@@ -1190,8 +1389,10 @@ export const listPurchaseOrders = async (filters = {}) => {
 
   if (filters.search) {
     const like = `%${filters.search.trim()}%`;
-    conditions.push('(p.po_number LIKE ? OR p.supplier_name LIKE ?)');
-    params.push(like, like);
+    conditions.push(
+      '(p.po_number LIKE ? OR p.supplier_name LIKE ? OR IFNULL(p.invoice_number, \'\') LIKE ?)'
+    );
+    params.push(like, like, like);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
@@ -1206,6 +1407,8 @@ export const listPurchaseOrders = async (filters = {}) => {
     [...baseParams, limit, offset]
   );
 
+  const enrichedRows = await enrichRowsWithSupplierNames(purchaseOrdersRows);
+
   const countRows = await query(
     `SELECT COUNT(*) AS totalItems
      FROM purchase_orders p
@@ -1216,7 +1419,7 @@ export const listPurchaseOrders = async (filters = {}) => {
   const totalItems = countRows?.[0]?.totalItems ? Number(countRows[0].totalItems) : 0;
 
   return {
-    purchaseOrders: purchaseOrdersRows.map(mapPurchaseOrderRow),
+    purchaseOrders: enrichedRows.map(mapPurchaseOrderRow),
     pagination: {
       currentPage: page,
       itemsPerPage: limit,
@@ -1240,7 +1443,8 @@ export const getPurchaseOrderById = async (purchaseOrderId) => {
     return null;
   }
 
-  const purchaseOrder = mapPurchaseOrderRow(rows[0]);
+  const enriched = await enrichRowsWithSupplierNames(rows);
+  const purchaseOrder = mapPurchaseOrderRow(enriched[0]);
   purchaseOrder.items = await fetchPurchaseOrderItems(purchaseOrderId);
   return purchaseOrder;
 };

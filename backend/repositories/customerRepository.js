@@ -93,6 +93,22 @@ export const upsertCustomerByPhone = async ({
   return rows?.[0] ?? null;
 };
 
+/** Normalized customer DTO for bills / POS (includes numeric DB id as customerId). */
+export const customerRowToDto = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    customerId: row.id,
+    storeId: row.store_id ?? null,
+    customerName: row.name ?? null,
+    customerPhone: row.phone,
+    customerEmail: row.email ?? null,
+    customerAddress: row.address ?? null,
+    customerGstin: row.gstin ?? null,
+    lastPurchaseOrderDate: row.last_purchase_at ?? null
+  };
+};
+
 export const getCustomerByPhone = async (phone, storeId = null) => {
   if (!phone) return null;
   await ensureCustomersTableExist();
@@ -111,17 +127,7 @@ export const getCustomerByPhone = async (phone, storeId = null) => {
     params
   );
   if (rows.length === 0) return null;
-  const row = rows[0];
-  return {
-    id: row.id,
-    storeId: row.store_id,
-    customerName: row.name,
-    customerPhone: row.phone,
-    customerEmail: row.email,
-    customerAddress: row.address,
-    customerGstin: row.gstin,
-    lastPurchaseOrderDate: row.last_purchase_at
-  };
+  return customerRowToDto(rows[0]);
 };
 
 
