@@ -845,7 +845,9 @@ export const createBill = async ({
           const taxRateValue = Number.isFinite(Number.parseFloat(item.taxRate))
             ? Number.parseFloat(item.taxRate)
             : 0;
-          const subtotalValue = Number((quantity * unitPrice).toFixed(2));
+          const bogoLabel = String(item.bogoOffer ?? item.bogo_offer ?? '').trim();
+          const billableQty = bogoLabel ? quantity / 2 : quantity;
+          const subtotalValue = Number((billableQty * unitPrice).toFixed(2));
           const discountApplied = Number(Math.max(discountValue, 0).toFixed(2));
           const totalValue = Number(Math.max(subtotalValue - discountApplied, 0).toFixed(2));
 

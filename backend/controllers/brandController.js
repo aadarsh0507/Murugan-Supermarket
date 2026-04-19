@@ -82,12 +82,29 @@ export const getAllBrands = async (req, res) => {
     }
 
     if (hasSubcategoryIdColumn && subcategoryFilter) {
-      if (includeLegacy) {
-        filters.push('(subcategory_id = ? OR subcategory_id IS NULL)');
-        params.push(subcategoryFilter);
-      } else {
-        filters.push('subcategory_id = ?');
-        params.push(subcategoryFilter);
+      const trimmed = String(subcategoryFilter).trim();
+      if (trimmed) {
+        const orParts = [];
+        const subParams = [];
+        orParts.push('subcategory_id <=> ?');
+        subParams.push(trimmed);
+        if (trimmed.includes(':')) {
+          const tail = trimmed.split(':').slice(1).join(':').trim();
+          if (tail && tail !== trimmed) {
+            orParts.push('subcategory_id <=> ?');
+            subParams.push(tail);
+          }
+        } else {
+          orParts.push(`SUBSTRING_INDEX(COALESCE(subcategory_id, ''), ':', -1) <=> ?`);
+          subParams.push(trimmed);
+        }
+        const inner = `(${orParts.join(' OR ')})`;
+        if (includeLegacy) {
+          filters.push(`(${inner} OR subcategory_id IS NULL)`);
+        } else {
+          filters.push(inner);
+        }
+        params.push(...subParams);
       }
     }
 
