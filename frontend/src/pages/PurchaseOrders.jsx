@@ -75,6 +75,7 @@ const EMPTY_ITEM_TEMPLATE = {
   purchasePrice: "",
   costPrice: "",
   salesPrice: "",
+  mrp: "",
   total: 0,
 };
 
@@ -609,6 +610,7 @@ const PurchaseOrders = () => {
     const purchaseVal = pickPrice(listCost || listSale);
     const costVal = pickPrice(listCost || listSale);
     const salesVal = pickPrice(listSale || listCost);
+    const mrpVal = pickPrice(Number(suggestion.mrp || 0) || listSale || listCost);
     items[index] = {
       ...items[index],
       particulars: suggestion.name || suggestion.itemName || '',
@@ -617,6 +619,7 @@ const PurchaseOrders = () => {
       purchasePrice: purchaseVal,
       costPrice: costVal,
       salesPrice: salesVal,
+      mrp: mrpVal,
       itemId: suggestion._id || '',
       categoryName: suggestion.category || '',
       subcategoryName: suggestion.subcategory || '',
@@ -869,7 +872,8 @@ const PurchaseOrders = () => {
         } else {
           itemData.taxPercent = 0;
         }
-        itemData.mrp = priceToNumber(item.salesPrice);
+        // Prefer explicit MRP field; fall back to salesPrice for backward compatibility
+        itemData.mrp = priceToNumber(item.mrp !== undefined ? item.mrp : item.salesPrice);
 
         return itemData;
       }),
@@ -1954,20 +1958,20 @@ const PurchaseOrders = () => {
               </div>
             </div>
             <div className="border rounded-lg w-full overflow-x-auto overflow-y-visible">
-              <Table className="w-full table-auto min-w-[1500px]">
+              <Table className="w-full table-auto min-w-[1600px]">
                 <TableHeader className="bg-blue-600 text-white">
                   <TableRow>
-                    <TableHead className="text-white w-10"><input type="checkbox" /></TableHead>
-                    <TableHead className="text-white w-56">PARTICULARS</TableHead>
-                    <TableHead className="text-white w-16">Qty</TableHead>
-                    <TableHead className="text-white min-w-[7rem]">Purchase price</TableHead>
-                    <TableHead className="text-white min-w-[7rem]">Cost price</TableHead>
-                    <TableHead className="text-white min-w-[7rem]">Sales</TableHead>
-                    <TableHead className="text-white w-20">Disc Type</TableHead>
-                    <TableHead className="text-white w-14">DIS</TableHead>
-                    <TableHead className="text-white min-w-[6rem]">Tax %</TableHead>
-                    <TableHead className="text-white w-16">TOTAL</TableHead>
-                    <TableHead className="text-white w-12">ACTION</TableHead>
+                    <TableHead className="text-white w-14">S.no</TableHead>
+                    <TableHead className="text-white w-64">Product Name</TableHead>
+                    <TableHead className="text-white w-20">Quantity</TableHead>
+                    <TableHead className="text-white min-w-[8rem]">Purchase Price</TableHead>
+                    <TableHead className="text-white min-w-[7rem]">Tax</TableHead>
+                    <TableHead className="text-white min-w-[11rem]">Discount</TableHead>
+                    <TableHead className="text-white min-w-[8rem]">Cost Price</TableHead>
+                    <TableHead className="text-white min-w-[8rem]">Sales Price</TableHead>
+                    <TableHead className="text-white min-w-[8rem]">MRP</TableHead>
+                    <TableHead className="text-white w-20">Total</TableHead>
+                    <TableHead className="text-white w-12">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -1977,12 +1981,14 @@ const PurchaseOrders = () => {
                       data-row-index={index}
                       className={highlightedRowIndex === index ? "bg-yellow-200 animate-pulse" : ""}
                     >
-                      <TableCell><input type="checkbox" /></TableCell>
-                      <TableCell className="relative overflow-visible min-w-[20rem]">
+                      <TableCell className="font-medium text-slate-700">
+                        {index + 1}
+                      </TableCell>
+                      <TableCell className="relative overflow-visible min-w-[22rem]">
                         <div className="suggestions-dropdown relative w-full max-w-[24rem]">
                           <Input
                             ref={(el) => (inputRefs.current[index] = el)}
-                            placeholder="Search for a Particulars"
+                            placeholder="Search Product Name / SKU / Barcode"
                             value={item.particulars}
                             onChange={(e) => {
                               let inputValue = e.target.value;
@@ -2198,6 +2204,68 @@ const PurchaseOrders = () => {
                         </div>
                       </TableCell>
                       <TableCell className="min-w-[7rem]">
+                        <Select
+                          value={
+                            item.taxPercent === "" || item.taxPercent == null
+                              ? undefined
+                              : String(item.taxPercent)
+                          }
+                          onValueChange={(v) => updateItem(index, "taxPercent", parseFloat(v) || 0)}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Tax %" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">0%</SelectItem>
+                            <SelectItem value="5">5%</SelectItem>
+                            <SelectItem value="18">18%</SelectItem>
+                            <SelectItem value="28">28%</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                      <TableCell className="min-w-[11rem]">
+                        <div className="flex items-center gap-2">
+                          <Select
+                            value={item.discountType || "%"}
+                            onValueChange={(v) => updateItem(index, "discountType", v)}
+                          >
+                            <SelectTrigger className="w-20">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="%">%</SelectItem>
+                              <SelectItem value="Rate">Rate</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          {item.discountType === "%" ? (
+                            <Input
+                              type="number"
+                              value={item.disPercent || ""}
+                              onChange={(e) => {
+                                const value = parseFloat(e.target.value) || 0;
+                                updateItem(index, "disPercent", value);
+                              }}
+                              placeholder="%"
+                              className="w-full"
+                            />
+                          ) : (
+                            <div className="relative w-full">
+                              <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
+                              <Input
+                                type="number"
+                                value={item.dis || ""}
+                                onChange={(e) => {
+                                  const value = parseFloat(e.target.value) || 0;
+                                  updateItem(index, "dis", value);
+                                }}
+                                placeholder="0"
+                                className="w-full pl-6"
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </TableCell>
+                      <TableCell className="min-w-[7rem]">
                         <div className="relative">
                           <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
                           <Input
@@ -2241,67 +2309,27 @@ const PurchaseOrders = () => {
                           />
                         </div>
                       </TableCell>
-                      <TableCell className="min-w-[8rem]">
-                        <Select
-                          value={item.discountType || '%'}
-                          onValueChange={(v) => updateItem(index, 'discountType', v)}
-                        >
-                          <SelectTrigger className="w-full max-w-20">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="%">%</SelectItem>
-                            <SelectItem value="Rate">Rate</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </TableCell>
                       <TableCell className="min-w-[7rem]">
-                        {item.discountType === '%' ? (
+                        <div className="relative">
+                          <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
                           <Input
                             type="number"
-                            value={item.disPercent || ''}
+                            step="0.01"
+                            min="0"
+                            value={item.mrp === "" || item.mrp == null ? "" : item.mrp}
                             onChange={(e) => {
-                              const value = parseFloat(e.target.value) || 0;
-                              updateItem(index, 'disPercent', value);
+                              const raw = e.target.value;
+                              if (raw === "") {
+                                updateItem(index, "mrp", "");
+                              } else {
+                                const n = parseFloat(raw);
+                                updateItem(index, "mrp", Number.isNaN(n) ? "" : n);
+                              }
                             }}
-                            placeholder="%"
-                            className="w-full"
+                            placeholder=""
+                            className="w-full pl-6"
                           />
-                        ) : (
-                          <div className="relative">
-                            <span className="absolute left-2 top-1/2 transform -translate-y-1/2 text-sm text-muted-foreground">₹</span>
-                            <Input
-                              type="number"
-                              value={item.dis || ''}
-                              onChange={(e) => {
-                                const value = parseFloat(e.target.value) || 0;
-                                updateItem(index, 'dis', value);
-                              }}
-                              placeholder="0"
-                              className="w-full pl-6"
-                            />
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell className="min-w-[7rem]">
-                        <Select
-                          value={
-                            item.taxPercent === "" || item.taxPercent == null
-                              ? undefined
-                              : String(item.taxPercent)
-                          }
-                          onValueChange={(v) => updateItem(index, "taxPercent", parseFloat(v) || 0)}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Tax %" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="0">0%</SelectItem>
-                            <SelectItem value="5">5%</SelectItem>
-                            <SelectItem value="18">18%</SelectItem>
-                            <SelectItem value="28">28%</SelectItem>
-                          </SelectContent>
-                        </Select>
+                        </div>
                       </TableCell>
                       <TableCell className="font-medium min-w-[7rem]">
                         <div className="rounded-md border px-3 py-2 bg-slate-50 text-slate-900">

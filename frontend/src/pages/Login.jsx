@@ -203,10 +203,10 @@ export default function Login() {
               className="h-5 w-5 flex-shrink-0 object-contain sm:h-6 sm:w-6"
             />
             <a
-              href="mailto:info@pushdiggy.gmail.com"
+              href="mailto:info@pushdiggy.com"
               className="text-xs text-white underline-offset-2 hover:underline sm:text-sm truncate min-w-0"
             >
-              info@pushdiggy.gmail.com
+              info@pushdiggy.com
             </a>
           </div>
           <div className="flex items-center justify-center gap-3 sm:gap-4 sm:flex-shrink-0">

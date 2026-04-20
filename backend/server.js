@@ -28,6 +28,7 @@ import creditRoutes from './routes/credits.js';
 import customerCreditRoutes from './routes/customerCredits.js';
 import screenRoutes from './routes/screens.js';
 import syncRoutes from './routes/sync.js';
+import devRoutes from './routes/dev.js';
 import { ensureDirectoryExists, uploadsRootDir } from './utils/uploads.js';
 import cron from 'node-cron';
 import { backupAndUpload } from './controllers/syncController.js';
@@ -179,6 +180,7 @@ app.use('/api/credits', creditRoutes);
 app.use('/api/customer-credits', customerCreditRoutes);
 app.use('/api/screens', screenRoutes);
 app.use('/api/sync-to-global', syncRoutes);
+app.use('/api/dev', devRoutes);
 // Backup and upload endpoint (direct route)
 app.post('/api/backup-and-upload', backupAndUpload);
 
