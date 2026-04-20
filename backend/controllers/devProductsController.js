@@ -107,6 +107,13 @@ const buildRowKeyMap = (row) => {
   return map;
 };
 
+const sanitizeColumnName = (raw, fallback) => {
+  const base = String(raw ?? '').trim();
+  const cleaned = base.replace(/[^A-Za-z0-9_]/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '');
+  if (cleaned) return cleaned.slice(0, 64);
+  return String(fallback ?? 'col').slice(0, 64);
+};
+
 const CSV_TO_DB_ALIASES = {
   // identity handled automatically by matching column name
   // common CSV headers → Products table column names
@@ -184,8 +191,26 @@ const ensureTargetTableExists = async (tableName) => {
     CREATE TABLE IF NOT EXISTS \`${tableName}\` (
       ProductCode VARCHAR(100) NOT NULL,
       ProductName VARCHAR(255) NULL,
+      ProductFullName VARCHAR(255) NULL,
+      store_id BIGINT UNSIGNED NULL,
+      csv_data JSON NULL,
       PRIMARY KEY (ProductCode)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC
+  `
+  );
+};
+
+const ensureProductsExtraTable = async () => {
+  await query(
+    `
+    CREATE TABLE IF NOT EXISTS \`Products_extra\` (
+      ProductCode VARCHAR(100) NOT NULL,
+      store_id BIGINT UNSIGNED NULL,
+      extra_data JSON NULL,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (ProductCode),
+      KEY idx_products_extra_store (store_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC
   `
   );
 };
@@ -203,12 +228,34 @@ const ensureColumnsExist = async (tableName, columns = []) => {
   );
   const existingSet = new Set((existing || []).map((r) => String(r.name)));
 
+  const guessColumnType = (col) => {
+    // Prefer sane MySQL types for known Products schema columns.
+    const c = String(col);
+    const norm = c.toLowerCase();
+    if (c === 'ProductCode') return null;
+    if (c === 'ProductName') return 'VARCHAR(255) NULL';
+    if (c === 'ProductFullName') return 'VARCHAR(255) NULL';
+    if (norm === 'store_id') return 'BIGINT UNSIGNED NULL';
+    if (norm.endsWith('date') || norm.endsWith('datetime')) return 'DATETIME NULL';
+    if (norm.includes('price') || norm === 'mrp' || norm.includes('amount') || norm.includes('tax') || norm.includes('margin')) {
+      return 'DECIMAL(12,2) NULL';
+    }
+    if (norm.includes('stock') || norm.includes('level') || norm.includes('quantity') || norm.includes('qty') || norm.includes('ratio')) {
+      return 'INT NULL';
+    }
+    if (norm.startsWith('is') || norm.startsWith('allow') || norm.startsWith('donot') || norm.includes('applicable')) {
+      return 'TINYINT(1) NULL';
+    }
+    // Default: store as TEXT so we never lose CSV fields
+    return 'TEXT NULL';
+  };
+
   for (const col of columns) {
     if (!col || existingSet.has(col)) continue;
     if (col === 'ProductCode') continue; // already created
     try {
-      // Use TEXT as a safe default for unknown/large CSV fields.
-      await query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${col}\` TEXT NULL`);
+      const typeDef = guessColumnType(col) || 'TEXT NULL';
+      await query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${col}\` ${typeDef}`);
       existingSet.add(col);
     } catch (e) {
       // Ignore duplicates; otherwise continue
@@ -217,6 +264,8 @@ const ensureColumnsExist = async (tableName, columns = []) => {
       }
     }
   }
+
+  return existingSet;
 };
 
 const getProductsTableSchema = async (tableName = 'Products') => {
@@ -256,11 +305,36 @@ const resolveBulkOnly = (req) => {
   return ['1', 'true', 'yes', 'y'].includes(s);
 };
 
+const resolveAsJson = (req) => {
+  const raw = req.query.asJson ?? req.query.as_json ?? req.query.json;
+  if (raw === undefined || raw === null) return false;
+  const s = String(raw).trim().toLowerCase();
+  return ['1', 'true', 'yes', 'y'].includes(s);
+};
+
+const normalizeNullStringsDeep = (value) => {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (typeof value === 'string') {
+    const t = value.trim();
+    if (t.toLowerCase() === 'null') return null;
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(normalizeNullStringsDeep);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = normalizeNullStringsDeep(v);
+    return out;
+  }
+  return value;
+};
+
 const coerceValueForColumn = (value, colType) => {
   if (value === undefined) return undefined;
   if (value === null) return null;
   const raw = typeof value === 'string' ? value.trim() : value;
   if (raw === '') return null;
+  if (typeof raw === 'string' && raw.trim().toLowerCase() === 'null') return null;
 
   const t = String(colType || '').toLowerCase();
   if (['int', 'bigint', 'smallint', 'mediumint', 'tinyint', 'decimal', 'double', 'float'].includes(t)) {
@@ -286,8 +360,23 @@ const coerceValueForColumn = (value, colType) => {
 
 const buildDynamicBulkUpsert = ({ tableName, columnsToInsert, columnsToUpdate }) => {
   const insertColsSql = columnsToInsert.map((c) => `\`${c}\``).join(', ');
-  const placeholderCols = columnsToInsert.filter((c) => !['CreationDate', 'ModifiedDate', 'TotalStock'].includes(c));
-  const placeholders = `(${placeholderCols.map(() => '?').join(', ')}, NOW(), NOW(), 0)`;
+  const includesCreation = columnsToInsert.includes('CreationDate');
+  const includesModified = columnsToInsert.includes('ModifiedDate');
+  const includesTotalStock = columnsToInsert.includes('TotalStock');
+
+  const placeholderCols = columnsToInsert.filter(
+    (c) => !['CreationDate', 'ModifiedDate', 'TotalStock'].includes(c)
+  );
+
+  const computedParts = [
+    ...(includesCreation ? ['NOW()'] : []),
+    ...(includesModified ? ['NOW()'] : []),
+    ...(includesTotalStock ? ['0'] : []),
+  ];
+
+  const placeholders = `(${placeholderCols.map(() => '?').join(', ')}${
+    computedParts.length ? `, ${computedParts.join(', ')}` : ''
+  })`;
   const updateSql = columnsToUpdate
     .map((c) => (c === 'ModifiedDate' ? '`ModifiedDate` = NOW()' : `\`${c}\` = VALUES(\`${c}\`)`))
     .join(', ');
@@ -476,6 +565,7 @@ export const importProductsCsv = async (req, res) => {
     const schema = await getProductsTableSchema(targetTable);
     const productCodeStrategy = await resolveProductCodeStrategy();
     const bulkOnly = resolveBulkOnly(req);
+    const asJson = resolveAsJson(req);
     const batchSize = resolveBatchSize(req);
     const unmappedHeaders = new Set();
 
@@ -488,6 +578,9 @@ export const importProductsCsv = async (req, res) => {
     // For streaming flush
     let batch = [];
     let batchValues = [];
+    let extraBatch = [];
+    let extraBatchValues = [];
+    let extraBulk = null;
 
     const flushBatch = async () => {
       if (!bulk || batch.length === 0) return;
@@ -527,6 +620,16 @@ export const importProductsCsv = async (req, res) => {
       }
     };
 
+    const flushExtraBatch = async () => {
+      if (!extraBulk || extraBatch.length === 0) return;
+      try {
+        await query(extraBulk.sql(extraBatch.length), extraBatchValues);
+      } finally {
+        extraBatch = [];
+        extraBatchValues = [];
+      }
+    };
+
     const startedAt = Date.now();
     const stream = Readable.from(req.file.buffer).pipe(
       csvParser({ mapHeaders: ({ header }) => (header ? String(header).trim() : header) })
@@ -538,27 +641,90 @@ export const importProductsCsv = async (req, res) => {
       const line = processedRows + 1; // header line is 1
 
       if (!headerMapped) {
-        const normalizedCsvHeaders = new Set(Object.keys(row || {}).map((k) => normalizeHeaderKey(k)));
-        const matchedDbCols = new Set();
+        if (asJson) {
+          if (targetTable === 'Products') {
+            // Products table is too wide to safely add JSON column. Store full CSV row in Products_extra instead.
+            await ensureProductsExtraTable();
+            const mainSchema = await getProductsTableSchema('Products');
+            schema.byName = mainSchema.byName;
+            schema.byNorm = mainSchema.byNorm;
 
-        for (const h of normalizedCsvHeaders) {
-          if (!h) continue;
-          const aliasTarget = CSV_TO_DB_ALIASES[h];
-          const directTarget = schema.byNorm.get(h);
-          const target = aliasTarget || directTarget || null;
-          if (target) {
-            matchedDbCols.add(target);
+            // Upsert minimal safe fields into Products (so app can read ProductCode/ProductName).
+            columnsToInsert = ['ProductCode', 'ProductName'];
+            if (schema.byName.has('store_id')) columnsToInsert.push('store_id');
+            if (schema.byName.has('ModifiedDate')) columnsToInsert.push('ModifiedDate');
+
+            bulk = buildDynamicBulkUpsert({
+              tableName: 'Products',
+              columnsToInsert,
+              columnsToUpdate: Array.from(
+                new Set(
+                  ['ProductName', ...(schema.byName.has('store_id') ? ['store_id'] : [])].concat(
+                    schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []
+                  )
+                )
+              ),
+            });
           } else {
-            unmappedHeaders.add(h);
+            columnsToInsert = [
+              'ProductCode',
+              'ProductName',
+              'ProductFullName',
+              'store_id',
+              'csv_data',
+              'CreationDate',
+              'ModifiedDate',
+              'TotalStock',
+            ];
+            await ensureColumnsExist(targetTable, columnsToInsert);
+            const refreshed = await getProductsTableSchema(targetTable);
+            schema.byName = refreshed.byName;
+            schema.byNorm = refreshed.byNorm;
+            bulk = buildDynamicBulkUpsert({
+              tableName: targetTable,
+              columnsToInsert,
+              columnsToUpdate: [
+                'ProductName',
+                'ProductFullName',
+                'store_id',
+                'csv_data',
+                ...(schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []),
+              ],
+            });
           }
+          headerMapped = true;
+          importProductsCsv.__headerMappings = [];
+          // We store all headers inside csv_data, so "unmappedHeaders" is irrelevant in JSON mode.
+        } else {
+        // Build mapping: every CSV header -> a DB column name (create missing columns).
+        const rawHeaders = Object.keys(row || {}).map((k) => String(k ?? '').trim()).filter(Boolean);
+        const usedCols = new Set();
+        const headerMappings = [];
+
+        for (let idx = 0; idx < rawHeaders.length; idx += 1) {
+          const original = rawHeaders[idx];
+          const norm = normalizeHeaderKey(original);
+          if (!norm) continue;
+          const aliasTarget = CSV_TO_DB_ALIASES[norm];
+          const directTarget = schema.byNorm.get(norm);
+          const preferred = aliasTarget || directTarget || original;
+          let dbCol = sanitizeColumnName(preferred, `col_${idx + 1}`);
+          // Ensure unique column names
+          let suffix = 1;
+          while (usedCols.has(dbCol)) {
+            suffix += 1;
+            dbCol = sanitizeColumnName(`${dbCol}_${suffix}`, `col_${idx + 1}_${suffix}`);
+          }
+          usedCols.add(dbCol);
+          headerMappings.push({ norm, original, dbCol });
         }
 
+        const matchedDbCols = new Set(headerMappings.map((h) => h.dbCol));
+        // Ensure essential columns exist in insert set.
         matchedDbCols.add('ProductCode');
         matchedDbCols.add('ProductName');
         matchedDbCols.add('ProductFullName');
-        ['CreationDate', 'ModifiedDate', 'TotalStock'].forEach((c) => {
-          matchedDbCols.add(c);
-        });
+        ['CreationDate', 'ModifiedDate', 'TotalStock'].forEach((c) => matchedDbCols.add(c));
 
         columnsToInsert = Array.from(matchedDbCols);
 
@@ -569,6 +735,9 @@ export const importProductsCsv = async (req, res) => {
         schema.byName = refreshed.byName;
         schema.byNorm = refreshed.byNorm;
 
+        // IMPORTANT: Only keep columns that actually exist (some ALTERs may fail due to row-size limits).
+        columnsToInsert = columnsToInsert.filter((c) => schema.byName.has(c));
+
         const columnsToUpdate = columnsToInsert
           .filter((c) => !['ProductCode', 'CreationDate', 'TotalStock'].includes(c))
           .concat(schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []);
@@ -578,6 +747,9 @@ export const importProductsCsv = async (req, res) => {
           columnsToUpdate: Array.from(new Set(columnsToUpdate)),
         });
         headerMapped = true;
+        // Save mapping in closure for row processing
+        importProductsCsv.__headerMappings = headerMappings;
+        }
       }
 
       const rowMap = buildRowKeyMap(row);
@@ -607,33 +779,45 @@ export const importProductsCsv = async (req, res) => {
       const fullName = firstDefined(getRaw('ProductFullName'), getRaw('ProductName'), getRaw('name'));
       record.set('ProductFullName', String(fullName ?? productName).trim());
 
-      for (const dbCol of columnsToInsert) {
-        if (['ProductCode', 'ProductName', 'ProductFullName', 'CreationDate', 'ModifiedDate', 'TotalStock'].includes(dbCol)) {
-          continue;
-        }
+      const storeIdRaw = getRaw('store_id') ?? getRaw('storeId') ?? getRaw('StoreId') ?? getRaw('StoreID');
+      const storeId = toNumber(storeIdRaw);
+      if (storeId !== undefined) {
+        record.set('store_id', storeId);
+      }
 
-        let rawValue = getRaw(dbCol);
-        if (rawValue === undefined) {
-          for (const [csvKeyNorm, target] of Object.entries(CSV_TO_DB_ALIASES)) {
-            if (target === dbCol) {
-              const v = rowMap.get(csvKeyNorm);
-              if (v !== undefined) {
-                rawValue = v;
-                break;
-              }
-            }
+      if (asJson) {
+        if (targetTable === 'Products') {
+          // Store full CSV row in Products_extra.extra_data (JSON)
+          if (!extraBulk) {
+            extraBulk = buildDynamicBulkUpsert({
+              tableName: 'Products_extra',
+              columnsToInsert: ['ProductCode', 'store_id', 'extra_data', 'updated_at'],
+              columnsToUpdate: ['store_id', 'extra_data', 'updated_at'],
+            });
           }
+          extraBatch.push({ line, row });
+          extraBatchValues.push(
+            String(productCode).trim(),
+            storeId !== undefined ? storeId : null,
+            JSON.stringify(normalizeNullStringsDeep(row)),
+            new Date()
+          );
+        } else {
+          record.set('csv_data', JSON.stringify(normalizeNullStringsDeep(row)));
         }
-        if (rawValue === undefined) continue;
-
-        if (dbCol === 'SubCategory') {
-          const normalized = normalizeSubcategoryId(rawValue, getRaw('CategoryCode') ?? getRaw('categoryId'));
-          record.set('SubCategory', subcategoryCodeFromComposite(normalized));
-          continue;
+      } else {
+        const headerMappings = importProductsCsv.__headerMappings || [];
+        for (const { norm, dbCol } of headerMappings) {
+          const rawValue = rowMap.get(norm);
+          if (rawValue === undefined) continue;
+          if (dbCol === 'SubCategory') {
+            const normalized = normalizeSubcategoryId(rawValue, getRaw('CategoryCode') ?? getRaw('categoryId'));
+            record.set('SubCategory', subcategoryCodeFromComposite(normalized));
+            continue;
+          }
+          const colType = schema.byName.get(dbCol)?.dataType;
+          record.set(dbCol, coerceValueForColumn(rawValue, colType));
         }
-
-        const colType = schema.byName.get(dbCol)?.dataType;
-        record.set(dbCol, coerceValueForColumn(rawValue, colType));
       }
 
       batch.push({ line, row });
@@ -644,10 +828,14 @@ export const importProductsCsv = async (req, res) => {
 
       if (batch.length >= batchSize) {
         await flushBatch();
+        if (asJson && targetTable === 'Products') {
+          await flushExtraBatch();
+        }
       }
     }
 
     await flushBatch();
+    await flushExtraBatch();
 
     const elapsedMs = Date.now() - startedAt;
 
@@ -659,10 +847,11 @@ export const importProductsCsv = async (req, res) => {
         createdCount: upsertedCount,
         failedCount: failed.length,
         failed: failed.slice(0, 50),
-        unmappedHeaders: Array.from(unmappedHeaders).slice(0, 50),
+        unmappedHeaders: asJson ? [] : Array.from(unmappedHeaders).slice(0, 50),
         batchSize,
         elapsedMs,
         targetTable,
+        asJson,
       },
     });
   } catch (error) {
