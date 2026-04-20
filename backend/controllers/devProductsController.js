@@ -166,14 +166,69 @@ const CSV_TO_DB_ALIASES = {
   store_id: 'store_id',
 };
 
-const getProductsTableSchema = async () => {
+const sanitizeTargetTable = (raw) => {
+  const name = String(raw ?? '').trim();
+  if (!name) return 'Products';
+  // Allow only letters, numbers, underscore. Prevent SQL injection via table name.
+  if (!/^[A-Za-z0-9_]+$/.test(name)) {
+    return 'Products';
+  }
+  return name;
+};
+
+const ensureTargetTableExists = async (tableName) => {
+  // Create a new table that can accept full CSV schema (generic types).
+  // Keep ProductCode as PRIMARY KEY so upsert works.
+  await query(
+    `
+    CREATE TABLE IF NOT EXISTS \`${tableName}\` (
+      ProductCode VARCHAR(100) NOT NULL,
+      ProductName VARCHAR(255) NULL,
+      PRIMARY KEY (ProductCode)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `
+  );
+};
+
+const ensureColumnsExist = async (tableName, columns = []) => {
+  if (!Array.isArray(columns) || columns.length === 0) return;
+  const existing = await query(
+    `
+    SELECT COLUMN_NAME AS name
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = ?
+  `,
+    [tableName]
+  );
+  const existingSet = new Set((existing || []).map((r) => String(r.name)));
+
+  for (const col of columns) {
+    if (!col || existingSet.has(col)) continue;
+    if (col === 'ProductCode') continue; // already created
+    try {
+      // Use TEXT as a safe default for unknown/large CSV fields.
+      await query(`ALTER TABLE \`${tableName}\` ADD COLUMN \`${col}\` TEXT NULL`);
+      existingSet.add(col);
+    } catch (e) {
+      // Ignore duplicates; otherwise continue
+      if (!String(e?.message || '').includes('Duplicate column')) {
+        console.warn(`Failed adding column ${col} to ${tableName}:`, e?.message);
+      }
+    }
+  }
+};
+
+const getProductsTableSchema = async (tableName = 'Products') => {
   const cols = await query(
     `
     SELECT COLUMN_NAME AS name, DATA_TYPE AS dataType
     FROM information_schema.COLUMNS
     WHERE TABLE_SCHEMA = DATABASE()
-      AND TABLE_NAME = 'Products'
+      AND TABLE_NAME = ?
   `
+    ,
+    [tableName]
   );
   const byNorm = new Map();
   const byName = new Map();
@@ -229,7 +284,7 @@ const coerceValueForColumn = (value, colType) => {
   return typeof raw === 'string' ? raw : String(raw);
 };
 
-const buildDynamicBulkUpsert = ({ columnsToInsert, columnsToUpdate }) => {
+const buildDynamicBulkUpsert = ({ tableName, columnsToInsert, columnsToUpdate }) => {
   const insertColsSql = columnsToInsert.map((c) => `\`${c}\``).join(', ');
   const placeholderCols = columnsToInsert.filter((c) => !['CreationDate', 'ModifiedDate', 'TotalStock'].includes(c));
   const placeholders = `(${placeholderCols.map(() => '?').join(', ')}, NOW(), NOW(), 0)`;
@@ -240,7 +295,7 @@ const buildDynamicBulkUpsert = ({ columnsToInsert, columnsToUpdate }) => {
   return {
     placeholderCols,
     sql: (rowCount) => `
-      INSERT INTO Products (${insertColsSql})
+      INSERT INTO \`${tableName}\` (${insertColsSql})
       VALUES ${Array.from({ length: rowCount }).map(() => placeholders).join(', ')}
       ON DUPLICATE KEY UPDATE ${updateSql}
     `,
@@ -414,8 +469,11 @@ export const importProductsCsv = async (req, res) => {
       });
     }
 
-    // Faster streaming bulk upsert into Products table (schema-driven).
-    const schema = await getProductsTableSchema();
+    const targetTable = sanitizeTargetTable(req.query.targetTable ?? req.query.table ?? 'Products');
+    await ensureTargetTableExists(targetTable);
+
+    // Faster streaming bulk upsert into target table (schema-driven).
+    const schema = await getProductsTableSchema(targetTable);
     const productCodeStrategy = await resolveProductCodeStrategy();
     const bulkOnly = resolveBulkOnly(req);
     const batchSize = resolveBatchSize(req);
@@ -488,7 +546,7 @@ export const importProductsCsv = async (req, res) => {
           const aliasTarget = CSV_TO_DB_ALIASES[h];
           const directTarget = schema.byNorm.get(h);
           const target = aliasTarget || directTarget || null;
-          if (target && schema.byName.has(target)) {
+          if (target) {
             matchedDbCols.add(target);
           } else {
             unmappedHeaders.add(h);
@@ -496,17 +554,26 @@ export const importProductsCsv = async (req, res) => {
         }
 
         matchedDbCols.add('ProductCode');
-        if (schema.byName.has('ProductName')) matchedDbCols.add('ProductName');
-        if (schema.byName.has('ProductFullName')) matchedDbCols.add('ProductFullName');
+        matchedDbCols.add('ProductName');
+        matchedDbCols.add('ProductFullName');
         ['CreationDate', 'ModifiedDate', 'TotalStock'].forEach((c) => {
-          if (schema.byName.has(c)) matchedDbCols.add(c);
+          matchedDbCols.add(c);
         });
 
         columnsToInsert = Array.from(matchedDbCols);
+
+        // Ensure the target table has all columns we intend to write
+        await ensureColumnsExist(targetTable, columnsToInsert);
+        // Refresh schema after adding columns so type coercion can work where possible.
+        const refreshed = await getProductsTableSchema(targetTable);
+        schema.byName = refreshed.byName;
+        schema.byNorm = refreshed.byNorm;
+
         const columnsToUpdate = columnsToInsert
           .filter((c) => !['ProductCode', 'CreationDate', 'TotalStock'].includes(c))
           .concat(schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []);
         bulk = buildDynamicBulkUpsert({
+          tableName: targetTable,
           columnsToInsert,
           columnsToUpdate: Array.from(new Set(columnsToUpdate)),
         });
@@ -537,10 +604,8 @@ export const importProductsCsv = async (req, res) => {
       record.set('ProductCode', String(productCode).trim());
       record.set('ProductName', String(productName).trim());
 
-      if (schema.byName.has('ProductFullName')) {
-        const fullName = firstDefined(getRaw('ProductFullName'), getRaw('ProductName'), getRaw('name'));
-        record.set('ProductFullName', String(fullName ?? productName).trim());
-      }
+      const fullName = firstDefined(getRaw('ProductFullName'), getRaw('ProductName'), getRaw('name'));
+      record.set('ProductFullName', String(fullName ?? productName).trim());
 
       for (const dbCol of columnsToInsert) {
         if (['ProductCode', 'ProductName', 'ProductFullName', 'CreationDate', 'ModifiedDate', 'TotalStock'].includes(dbCol)) {
@@ -597,6 +662,7 @@ export const importProductsCsv = async (req, res) => {
         unmappedHeaders: Array.from(unmappedHeaders).slice(0, 50),
         batchSize,
         elapsedMs,
+        targetTable,
       },
     });
   } catch (error) {
