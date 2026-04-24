@@ -3318,7 +3318,7 @@ export default function Items() {
               Update the information for the selected inventory item. Changes are saved when you click save.
             </DialogDescription>
           </DialogHeader>
-          <form onSubmit={handleEditSubmit} onKeyDown={handleEditFormKeyDown} className="space-y-6">
+          <form onSubmit={handleEditSubmit} onKeyDownCapture={handleEditFormKeyDown} className="space-y-6">
             {/* Basic Information */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Basic Information</h3>
@@ -3406,34 +3406,6 @@ export default function Items() {
                     onChange={handleFormChange('mrp')}
                     placeholder="0.00"
                   />
-                </div>
-              </div>
-            </div>
-
-            {/* Promotions */}
-            <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Offers</h3>
-              <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 p-4">
-                <Checkbox
-                  id="edit-item-bogo"
-                  checked={editForm.bogoOfferEnabled}
-                  onCheckedChange={(checked) =>
-                    setEditForm((prev) => ({
-                      ...prev,
-                      bogoOfferEnabled: checked === true
-                    }))
-                  }
-                />
-                <div className="grid gap-1.5 leading-none">
-                  <Label
-                    htmlFor="edit-item-bogo"
-                    className="text-sm font-medium cursor-pointer"
-                  >
-                    Buy one get one offer
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    When ticked, “{BOGO_OFFER_CARD_LABEL}” appears on the product card.
-                  </p>
                 </div>
               </div>
             </div>
@@ -4142,6 +4114,34 @@ export default function Items() {
               )}
             </div>
 
+            {/* Offers */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Offers</h3>
+              <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-muted/30 p-4">
+                <Checkbox
+                  id="edit-item-bogo"
+                  checked={editForm.bogoOfferEnabled}
+                  onCheckedChange={(checked) =>
+                    setEditForm((prev) => ({
+                      ...prev,
+                      bogoOfferEnabled: checked === true
+                    }))
+                  }
+                />
+                <div className="grid gap-1.5 leading-none">
+                  <Label
+                    htmlFor="edit-item-bogo"
+                    className="text-sm font-medium cursor-pointer"
+                  >
+                    Buy one get one offer
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    When ticked, “{BOGO_OFFER_CARD_LABEL}” appears on the product card.
+                  </p>
+                </div>
+              </div>
+            </div>
+
             <DialogFooter>
               <Button
                 type="button"
@@ -4176,7 +4176,7 @@ export default function Items() {
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleCreateItem} className="space-y-6">
+          <form onSubmit={handleCreateItem} onKeyDownCapture={handleEditFormKeyDown} className="space-y-6">
             {/* Basic Information */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Basic Information</h3>
