@@ -89,7 +89,7 @@ export function SyncToGlobalButton() {
   return (
     <span style={{ display: "inline-flex", gap: "0.5rem", flexWrap: "wrap" }}>
       <Button onClick={handleStart} disabled={syncing}>
-        {syncing ? `Backup & sync… ${progress}%` : "Backup & Upload"}
+        {syncing ? `Backup & sync… ${progress}%` : "Synchronize"}
       </Button>
       {(resumableSessionId || (typeof sessionStorage !== "undefined" && sessionStorage.getItem(SYNC_SESSION_KEY))) && !syncing && (
         <Button variant="outline" onClick={handleResume}>
