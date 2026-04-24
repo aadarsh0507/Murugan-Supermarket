@@ -6,6 +6,24 @@ import { query } from '../db/index.js';
 const firstDefined = (...values) =>
   values.find((v) => v !== undefined && v !== null && String(v).trim() !== '');
 
+const normalizeHeaderKey = (key) =>
+  String(key ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '')
+    .replace(/[_-]/g, '');
+
+const buildRowKeyMap = (row) => {
+  const map = new Map();
+  if (!row || typeof row !== 'object') return map;
+  for (const [k, v] of Object.entries(row)) {
+    const nk = normalizeHeaderKey(k);
+    if (!nk) continue;
+    map.set(nk, v);
+  }
+  return map;
+};
+
 const toNumber = (value) => {
   if (value === undefined || value === null || value === '') return undefined;
   const n = Number(String(value).trim());
@@ -21,27 +39,33 @@ const normalizeSubcategoryId = (raw, fallbackCategory) => {
 };
 
 const mapCsvRowToItemPayload = (row) => {
-  // Accept many possible column headers (case-insensitive-ish by trying variants).
-  const itemCode = firstDefined(row.itemCode, row.ItemCode, row.ProductCode, row.productCode, row.SKU, row.sku);
-  const name = firstDefined(row.name, row.Name, row.ProductName, row.productName, row.ProductFullName);
-  const barcode = firstDefined(row.barcode, row.Barcode, row.UniversalProductCode, row.universalProductCode, row.BarCodeDescription);
-  const brand = firstDefined(row.brand, row.Brand, row.ManufacturerCode, row.manufacturerCode, row.BrandCode, row.brandCode);
-  const categoryId = firstDefined(row.categoryId, row.CategoryCode, row.categoryCode, row.category);
-  const subcategoryIdRaw = firstDefined(row.subcategoryId, row.SubCategory, row.subCategory, row.subcategory);
-  const unit = firstDefined(row.unit, row.UnitOfMeasure, row.uom, row.UOM);
-  const description = firstDefined(row.description, row.UnitDescription, row.unitDescription, row.BulkDescription);
-  const notes = firstDefined(row.notes, row.Remarks, row.remarks);
-  const hsnCode = firstDefined(row.hsnCode, row.CommodityCode, row.commodityCode, row.hsn);
-  const storeId = toNumber(firstDefined(row.storeId, row.store_id, row.StoreId, row.StoreID));
+  // Accept many possible column headers (case-insensitive, space/underscore/hyphen tolerant).
+  const map = buildRowKeyMap(row);
+  const get = (...keys) =>
+    firstDefined(
+      ...keys.map((k) => map.get(normalizeHeaderKey(k)))
+    );
 
-  const costPrice = toNumber(firstDefined(row.costPrice, row.purchasePrice, row.PurchasePrice, row.CostPrice));
-  const sellingPrice = toNumber(firstDefined(row.sellingPrice, row.salePrice, row.SalePrice, row.Price, row.price));
-  const mrp = toNumber(firstDefined(row.mrp, row.MRP));
-  const gstRate = toNumber(firstDefined(row.gstRate, row.GstRate, row.TaxAmount, row.tax, row.taxRate));
-  const reorderLevel = toNumber(firstDefined(row.reorderLevel, row.ReorderLevel));
-  const minStock = toNumber(firstDefined(row.minStock, row.MinimumStockLevel, row.minimumStockLevel));
-  const maxStock = toNumber(firstDefined(row.maxStock, row.MaximumStockLevel, row.maximumStockLevel));
-  const bogoOffer = firstDefined(row.bogoOffer, row.BogoOffer, row.bogo);
+  const itemCode = get('itemCode', 'ItemCode', 'ProductCode', 'productCode', 'SKU', 'sku', 'code', 'Product Code');
+  const name = get('name', 'Name', 'ProductName', 'productName', 'ProductFullName', 'Product Name');
+  const barcode = get('barcode', 'Barcode', 'UniversalProductCode', 'universalProductCode', 'BarCodeDescription', 'Bar Code');
+  const brand = get('brand', 'Brand', 'ManufacturerCode', 'manufacturerCode', 'BrandCode', 'brandCode');
+  const categoryId = get('categoryId', 'CategoryCode', 'categoryCode', 'category', 'Category');
+  const subcategoryIdRaw = get('subcategoryId', 'SubCategory', 'subCategory', 'subcategory', 'Sub Category');
+  const unit = get('unit', 'UnitOfMeasure', 'uom', 'UOM', 'Unit');
+  const description = get('description', 'UnitDescription', 'unitDescription', 'BulkDescription');
+  const notes = get('notes', 'Remarks', 'remarks');
+  const hsnCode = get('hsnCode', 'CommodityCode', 'commodityCode', 'hsn', 'HSN');
+  const storeId = toNumber(get('storeId', 'store_id', 'StoreId', 'StoreID', 'store'));
+
+  const costPrice = toNumber(get('costPrice', 'purchasePrice', 'PurchasePrice', 'CostPrice', 'Purchase Price'));
+  const sellingPrice = toNumber(get('sellingPrice', 'salePrice', 'SalePrice', 'Price', 'price', 'Sale Price'));
+  const mrp = toNumber(get('mrp', 'MRP'));
+  const gstRate = toNumber(get('gstRate', 'GstRate', 'TaxAmount', 'tax', 'taxRate', 'GST'));
+  const reorderLevel = toNumber(get('reorderLevel', 'ReorderLevel'));
+  const minStock = toNumber(get('minStock', 'MinimumStockLevel', 'minimumStockLevel', 'MinStock'));
+  const maxStock = toNumber(get('maxStock', 'MaximumStockLevel', 'maximumStockLevel', 'MaxStock'));
+  const bogoOffer = get('bogoOffer', 'BogoOffer', 'bogo');
 
   const payload = {
     ...(itemCode !== undefined ? { itemCode: String(itemCode).trim() } : {}),
@@ -87,24 +111,6 @@ const chunk = (arr, size) => {
   const out = [];
   for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
   return out;
-};
-
-const normalizeHeaderKey = (key) =>
-  String(key ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, '')
-    .replace(/[_-]/g, '');
-
-const buildRowKeyMap = (row) => {
-  const map = new Map();
-  if (!row || typeof row !== 'object') return map;
-  for (const [k, v] of Object.entries(row)) {
-    const nk = normalizeHeaderKey(k);
-    if (!nk) continue;
-    map.set(nk, v);
-  }
-  return map;
 };
 
 const sanitizeColumnName = (raw, fallback) => {
@@ -195,21 +201,6 @@ const ensureTargetTableExists = async (tableName) => {
       store_id BIGINT UNSIGNED NULL,
       csv_data JSON NULL,
       PRIMARY KEY (ProductCode)
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC
-  `
-  );
-};
-
-const ensureProductsExtraTable = async () => {
-  await query(
-    `
-    CREATE TABLE IF NOT EXISTS \`Products_extra\` (
-      ProductCode VARCHAR(100) NOT NULL,
-      store_id BIGINT UNSIGNED NULL,
-      extra_data JSON NULL,
-      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-      PRIMARY KEY (ProductCode),
-      KEY idx_products_extra_store (store_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC
   `
   );
@@ -360,25 +351,14 @@ const coerceValueForColumn = (value, colType) => {
 
 const buildDynamicBulkUpsert = ({ tableName, columnsToInsert, columnsToUpdate }) => {
   const insertColsSql = columnsToInsert.map((c) => `\`${c}\``).join(', ');
-  const includesCreation = columnsToInsert.includes('CreationDate');
-  const includesModified = columnsToInsert.includes('ModifiedDate');
-  const includesTotalStock = columnsToInsert.includes('TotalStock');
-
-  const placeholderCols = columnsToInsert.filter(
-    (c) => !['CreationDate', 'ModifiedDate', 'TotalStock'].includes(c)
-  );
-
-  const computedParts = [
-    ...(includesCreation ? ['NOW()'] : []),
-    ...(includesModified ? ['NOW()'] : []),
-    ...(includesTotalStock ? ['0'] : []),
-  ];
-
-  const placeholders = `(${placeholderCols.map(() => '?').join(', ')}${
-    computedParts.length ? `, ${computedParts.join(', ')}` : ''
-  })`;
+  const placeholderCols = [...columnsToInsert];
+  const placeholders = `(${placeholderCols.map(() => '?').join(', ')})`;
   const updateSql = columnsToUpdate
-    .map((c) => (c === 'ModifiedDate' ? '`ModifiedDate` = NOW()' : `\`${c}\` = VALUES(\`${c}\`)`))
+    .map((c) =>
+      c === 'ModifiedDate'
+        ? '`ModifiedDate` = COALESCE(VALUES(`ModifiedDate`), NOW())'
+        : `\`${c}\` = VALUES(\`${c}\`)`
+    )
     .join(', ');
 
   return {
@@ -503,6 +483,8 @@ export const importProductsCsv = async (req, res) => {
     }
 
     const failed = [];
+    const modeRaw = String(req.query.mode ?? req.query.importMode ?? '').trim().toLowerCase();
+    const mode = modeRaw === 'items' ? 'items' : 'products';
 
     // If items table exists, reuse existing logic (safe). Bulk insert is only for Products table.
     const itemsTable = await query(
@@ -516,7 +498,7 @@ export const importProductsCsv = async (req, res) => {
     );
     const itemsTableExists = Array.isArray(itemsTable) && itemsTable.length > 0;
 
-    if (itemsTableExists) {
+    if (itemsTableExists && mode === 'items') {
       const rows = await parseCsvBuffer(req.file.buffer);
       if (!rows.length) {
         return res.status(400).json({
@@ -578,9 +560,6 @@ export const importProductsCsv = async (req, res) => {
     // For streaming flush
     let batch = [];
     let batchValues = [];
-    let extraBatch = [];
-    let extraBatchValues = [];
-    let extraBulk = null;
 
     const flushBatch = async () => {
       if (!bulk || batch.length === 0) return;
@@ -620,16 +599,6 @@ export const importProductsCsv = async (req, res) => {
       }
     };
 
-    const flushExtraBatch = async () => {
-      if (!extraBulk || extraBatch.length === 0) return;
-      try {
-        await query(extraBulk.sql(extraBatch.length), extraBatchValues);
-      } finally {
-        extraBatch = [];
-        extraBatchValues = [];
-      }
-    };
-
     const startedAt = Date.now();
     const stream = Readable.from(req.file.buffer).pipe(
       csvParser({ mapHeaders: ({ header }) => (header ? String(header).trim() : header) })
@@ -641,61 +610,6 @@ export const importProductsCsv = async (req, res) => {
       const line = processedRows + 1; // header line is 1
 
       if (!headerMapped) {
-        if (asJson) {
-          if (targetTable === 'Products') {
-            // Products table is too wide to safely add JSON column. Store full CSV row in Products_extra instead.
-            await ensureProductsExtraTable();
-            const mainSchema = await getProductsTableSchema('Products');
-            schema.byName = mainSchema.byName;
-            schema.byNorm = mainSchema.byNorm;
-
-            // Upsert minimal safe fields into Products (so app can read ProductCode/ProductName).
-            columnsToInsert = ['ProductCode', 'ProductName'];
-            if (schema.byName.has('store_id')) columnsToInsert.push('store_id');
-            if (schema.byName.has('ModifiedDate')) columnsToInsert.push('ModifiedDate');
-
-            bulk = buildDynamicBulkUpsert({
-              tableName: 'Products',
-              columnsToInsert,
-              columnsToUpdate: Array.from(
-                new Set(
-                  ['ProductName', ...(schema.byName.has('store_id') ? ['store_id'] : [])].concat(
-                    schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []
-                  )
-                )
-              ),
-            });
-          } else {
-            columnsToInsert = [
-              'ProductCode',
-              'ProductName',
-              'ProductFullName',
-              'store_id',
-              'csv_data',
-              'CreationDate',
-              'ModifiedDate',
-              'TotalStock',
-            ];
-            await ensureColumnsExist(targetTable, columnsToInsert);
-            const refreshed = await getProductsTableSchema(targetTable);
-            schema.byName = refreshed.byName;
-            schema.byNorm = refreshed.byNorm;
-            bulk = buildDynamicBulkUpsert({
-              tableName: targetTable,
-              columnsToInsert,
-              columnsToUpdate: [
-                'ProductName',
-                'ProductFullName',
-                'store_id',
-                'csv_data',
-                ...(schema.byName.has('ModifiedDate') ? ['ModifiedDate'] : []),
-              ],
-            });
-          }
-          headerMapped = true;
-          importProductsCsv.__headerMappings = [];
-          // We store all headers inside csv_data, so "unmappedHeaders" is irrelevant in JSON mode.
-        } else {
         // Build mapping: every CSV header -> a DB column name (create missing columns).
         const rawHeaders = Object.keys(row || {}).map((k) => String(k ?? '').trim()).filter(Boolean);
         const usedCols = new Set();
@@ -749,6 +663,12 @@ export const importProductsCsv = async (req, res) => {
         headerMapped = true;
         // Save mapping in closure for row processing
         importProductsCsv.__headerMappings = headerMappings;
+        // If JSON mode is requested, we additionally store raw CSV per row in Products_extra (or csv_data for custom tables).
+        if (asJson) {
+          await ensureColumnsExist(targetTable, ['csv_data']);
+          const refreshed2 = await getProductsTableSchema(targetTable);
+          schema.byName = refreshed2.byName;
+          schema.byNorm = refreshed2.byNorm;
         }
       }
 
@@ -786,56 +706,68 @@ export const importProductsCsv = async (req, res) => {
       }
 
       if (asJson) {
-        if (targetTable === 'Products') {
-          // Store full CSV row in Products_extra.extra_data (JSON)
-          if (!extraBulk) {
-            extraBulk = buildDynamicBulkUpsert({
-              tableName: 'Products_extra',
-              columnsToInsert: ['ProductCode', 'store_id', 'extra_data', 'updated_at'],
-              columnsToUpdate: ['store_id', 'extra_data', 'updated_at'],
-            });
-          }
-          extraBatch.push({ line, row });
-          extraBatchValues.push(
-            String(productCode).trim(),
-            storeId !== undefined ? storeId : null,
-            JSON.stringify(normalizeNullStringsDeep(row)),
-            new Date()
-          );
-        } else {
+        if (schema.byName.has('csv_data')) {
           record.set('csv_data', JSON.stringify(normalizeNullStringsDeep(row)));
         }
-      } else {
-        const headerMappings = importProductsCsv.__headerMappings || [];
-        for (const { norm, dbCol } of headerMappings) {
-          const rawValue = rowMap.get(norm);
-          if (rawValue === undefined) continue;
-          if (dbCol === 'SubCategory') {
-            const normalized = normalizeSubcategoryId(rawValue, getRaw('CategoryCode') ?? getRaw('categoryId'));
-            record.set('SubCategory', subcategoryCodeFromComposite(normalized));
-            continue;
-          }
-          const colType = schema.byName.get(dbCol)?.dataType;
-          record.set(dbCol, coerceValueForColumn(rawValue, colType));
+      }
+
+      // Option 3: enforce CreationDate/ModifiedDate defaults during import.
+      // If CSV has CreationDate/ModifiedDate but it's blank/NULL, use current time.
+      // If CSV doesn't have these columns, but DB expects them, still set a default.
+      if (schema.byName.has('CreationDate')) {
+        const rawCreation = rowMap.get(normalizeHeaderKey('CreationDate'));
+        const creationIsNullLike =
+          rawCreation === undefined ||
+          rawCreation === null ||
+          String(rawCreation).trim() === '' ||
+          String(rawCreation).trim().toLowerCase() === 'null';
+        record.set(
+          'CreationDate',
+          creationIsNullLike ? new Date() : coerceValueForColumn(rawCreation, 'datetime')
+        );
+      }
+      if (schema.byName.has('ModifiedDate')) {
+        const rawModified = rowMap.get(normalizeHeaderKey('ModifiedDate'));
+        const modifiedIsNullLike =
+          rawModified === undefined ||
+          rawModified === null ||
+          String(rawModified).trim() === '' ||
+          String(rawModified).trim().toLowerCase() === 'null';
+        record.set(
+          'ModifiedDate',
+          modifiedIsNullLike ? new Date() : coerceValueForColumn(rawModified, 'datetime')
+        );
+      }
+      if (schema.byName.has('TotalStock') && !record.has('TotalStock')) {
+        record.set('TotalStock', 0);
+      }
+
+      // Always map CSV columns into table columns (Products/custom table),
+      // regardless of JSON mode (JSON mode just adds raw-row storage).
+      const headerMappings = importProductsCsv.__headerMappings || [];
+      for (const { norm, dbCol } of headerMappings) {
+        const rawValue = rowMap.get(norm);
+        if (rawValue === undefined) continue;
+        if (dbCol === 'SubCategory') {
+          const normalized = normalizeSubcategoryId(rawValue, getRaw('CategoryCode') ?? getRaw('categoryId'));
+          record.set('SubCategory', subcategoryCodeFromComposite(normalized));
+          continue;
         }
+        const colType = schema.byName.get(dbCol)?.dataType;
+        record.set(dbCol, coerceValueForColumn(rawValue, colType));
       }
 
       batch.push({ line, row });
       for (const c of bulk.placeholderCols) {
-        if (c === 'CreationDate' || c === 'ModifiedDate' || c === 'TotalStock') continue;
         batchValues.push(record.has(c) ? record.get(c) : null);
       }
 
       if (batch.length >= batchSize) {
         await flushBatch();
-        if (asJson && targetTable === 'Products') {
-          await flushExtraBatch();
-        }
       }
     }
 
     await flushBatch();
-    await flushExtraBatch();
 
     const elapsedMs = Date.now() - startedAt;
 
