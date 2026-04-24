@@ -632,6 +632,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
               background: #FFFFFF;
               width: 104mm;
               max-width: 104mm;
+              height: auto;
+              overflow: visible;
             }
             .bill-content {
               width: 98mm;
@@ -649,6 +651,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
               word-break: keep-all;
               overflow-wrap: normal;
               text-align: left;
+              height: auto;
+              overflow: visible;
             }
             .printer-commands {
               display: none;
@@ -677,6 +681,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
                 font-weight: bold !important;
                 color: #000000 !important;
                 background: #FFFFFF !important;
+                height: auto !important;
+                overflow: visible !important;
               }
               .bill-content { 
                 padding: 4px 0 4px 0 !important;
@@ -695,6 +701,8 @@ const BillModal = ({ isOpen, onClose, billData, isAdmin = false }) => {
                 overflow-wrap: normal !important;
                 text-align: left !important;
                 transform: scale(1) !important;
+                height: auto !important;
+                overflow: visible !important;
               }
               /* Force page break and cut after content */
               .printer-commands {

@@ -5,6 +5,195 @@ const toNumber = (value, defaultValue = 0) => {
   return Number.isFinite(num) ? num : defaultValue;
 };
 
+/**
+ * GST priority for billing:
+ * 1) latest purchase_order_items.tax_percent (PO table)
+ * 2) fallback to item/products gstRate
+ */
+const fetchLatestPoTaxPercent = async ({ skuOrCode, itemId, storeId } = {}) => {
+  const sku = skuOrCode != null ? String(skuOrCode).trim() : '';
+  const itemIdNum = Number(itemId);
+  const hasItemId = Number.isFinite(itemIdNum) && itemIdNum > 0;
+  const storeIdNum = Number(storeId);
+  const hasStoreId = Number.isFinite(storeIdNum) && storeIdNum > 0;
+
+  if (!sku && !hasItemId) {
+    return null;
+  }
+
+  const where = ['po.status != ?'];
+  const params = ['cancelled'];
+
+  if (hasStoreId) {
+    where.push('po.store_id = ?');
+    params.push(storeIdNum);
+  }
+
+  const match = [];
+  if (sku) {
+    match.push('poi.sku = ?');
+    params.push(sku);
+  }
+  if (hasItemId) {
+    match.push('poi.item_id = ?');
+    params.push(itemIdNum);
+  }
+  if (match.length === 0) {
+    return null;
+  }
+  where.push(`(${match.join(' OR ')})`);
+
+  try {
+    const rows = await query(
+      `
+      SELECT poi.tax_percent AS taxPercent
+      FROM purchase_order_items poi
+      INNER JOIN purchase_orders po ON po.id = poi.purchase_order_id
+      WHERE ${where.join(' AND ')}
+      ORDER BY po.order_date DESC, poi.id DESC
+      LIMIT 1
+      `,
+      params
+    );
+
+    const raw = rows?.[0]?.taxPercent;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return null;
+    return n;
+  } catch (error) {
+    // If PO tables don't exist in some environments, ignore and fallback to Products/Items gstRate
+    if (error?.code === 'ER_NO_SUCH_TABLE') {
+      return null;
+    }
+    console.warn('fetchLatestPoTaxPercent error:', error?.message ?? error);
+    return null;
+  }
+};
+
+const applyPoTaxPriority = async (item, { storeId } = {}) => {
+  if (!item || typeof item !== 'object') return item;
+  const skuOrCode = item.sku ?? item.itemCode ?? item.id ?? null;
+  const poTax = await fetchLatestPoTaxPercent({
+    skuOrCode,
+    itemId: item.id,
+    storeId
+  });
+  if (poTax === null || poTax === undefined) {
+    return item;
+  }
+  return {
+    ...item,
+    gstRate: poTax,
+    gstRateSource: 'purchase_order_items'
+  };
+};
+
+/**
+ * If the scanned barcode is a PO-generated barcode (purchase_order_barcodes),
+ * return item details from that barcode first (batch/expiry/tax/mrp/amount).
+ */
+const findItemByPoGeneratedBarcode = async (barcode, storeId = undefined) => {
+  const storeIdNum = Number(storeId);
+  const hasStoreId = Number.isFinite(storeIdNum) && storeIdNum > 0;
+
+  try {
+    const rows = await query(
+      `
+      SELECT
+        pb.barcode,
+        pb.amount,
+        pb.batch_number,
+        pb.expiry_date,
+        pb.item_sku,
+        pb.item_name,
+        pb.purchase_order_id,
+        pb.item_index,
+        po.order_date,
+        po.store_id,
+        poi.sku AS poi_sku,
+        poi.item_id,
+        poi.unit,
+        poi.hsn_number,
+        poi.tax_percent,
+        poi.mrp,
+        poi.cost_price,
+        poi.purchase_price
+      FROM purchase_order_barcodes pb
+      INNER JOIN purchase_orders po ON po.id = pb.purchase_order_id
+      LEFT JOIN purchase_order_items poi
+        ON poi.purchase_order_id = pb.purchase_order_id
+       AND poi.line_index = pb.item_index
+      WHERE pb.barcode = ?
+        AND po.status != 'cancelled'
+        ${hasStoreId ? 'AND po.store_id = ?' : ''}
+      ORDER BY po.order_date DESC, pb.id DESC
+      LIMIT 1
+      `,
+      hasStoreId ? [barcode, storeIdNum] : [barcode]
+    );
+
+    const row = rows?.[0];
+    if (!row) return null;
+
+    const sku = (row.poi_sku ?? row.item_sku ?? '').toString().trim();
+    const name = (row.item_name ?? '').toString().trim();
+    const amount = Number(row.amount ?? 0);
+    const mrp = Number(row.mrp ?? 0);
+    const gstRate = Number(row.tax_percent ?? 0);
+
+    const poItem = {
+      id: row.item_id != null ? Number(row.item_id) : (sku ? sku : null),
+      itemCode: sku || null,
+      sku: sku || null,
+      name: name || 'Item',
+      barcode: String(row.barcode),
+      batch: row.batch_number ?? null,
+      batchNumber: row.batch_number ?? null,
+      expiryDate: row.expiry_date ?? null,
+      hsnCode: row.hsn_number ?? null,
+      gstRate: Number.isFinite(gstRate) ? gstRate : 0,
+      mrp: Number.isFinite(mrp) ? mrp : 0,
+      costPrice: Number(row.cost_price ?? row.purchase_price ?? 0),
+      purchasePrice: Number(row.purchase_price ?? row.cost_price ?? 0),
+      // Billing "Rate/price": barcode amount should win if present
+      price: Number.isFinite(amount) && amount > 0 ? amount : 0,
+      sellingPrice: Number.isFinite(amount) && amount > 0 ? amount : 0,
+      unit: row.unit ?? null,
+      source: 'purchase_order_barcodes'
+    };
+
+    // If we have SKU, fetch catalog row for missing bits (do not override PO barcode fields)
+    if (sku) {
+      let catalog = null;
+      if (await checkItemsTableExists()) {
+        catalog = await findItemByBarcodeInItemsTable(sku, storeId);
+      } else {
+        catalog = await findItemByBarcodeInProductsTable(sku, storeId);
+      }
+      if (catalog) {
+        return {
+          ...catalog,
+          ...poItem,
+          ...(poItem.price > 0
+            ? {}
+            : {
+                price: Number(catalog.price ?? catalog.sellingPrice ?? 0),
+                sellingPrice: Number(catalog.sellingPrice ?? catalog.price ?? 0),
+              }),
+        };
+      }
+    }
+
+    return poItem;
+  } catch (error) {
+    if (error?.code === 'ER_NO_SUCH_TABLE') {
+      return null;
+    }
+    console.warn('findItemByPoGeneratedBarcode error:', error?.message ?? error);
+    return null;
+  }
+};
+
 let itemsTableExistsCache = null;
 let overridesTableEnsured = false;
 let itemsTableColumnsEnsured = false;
@@ -867,9 +1056,11 @@ export const listItems = async (options = {}) => {
 
 export const getItemById = async (itemId, storeId = undefined) => {
   if (await checkItemsTableExists()) {
-    return getItemByIdFromItemsTable(itemId, storeId);
+    const item = await getItemByIdFromItemsTable(itemId, storeId);
+    return applyPoTaxPriority(item, { storeId });
   }
-  return getItemByIdFromProductsTable(itemId, storeId);
+  const item = await getItemByIdFromProductsTable(itemId, storeId);
+  return applyPoTaxPriority(item, { storeId });
 };
 
 const generateProductCode = async () => {
@@ -1762,10 +1953,16 @@ export const findItemByBarcode = async (barcode, storeId = undefined) => {
     return null;
   }
 
+  // 1) PO-generated barcode (from purchase entry) should win
+  const poBarcodeItem = await findItemByPoGeneratedBarcode(trimmed, storeId);
+  if (poBarcodeItem) {
+    return applyPoTaxPriority(poBarcodeItem, { storeId });
+  }
+
   if (await checkItemsTableExists()) {
     const item = await findItemByBarcodeInItemsTable(trimmed, storeId);
     if (item) {
-      return item;
+      return applyPoTaxPriority(item, { storeId });
     }
   }
 
@@ -1773,11 +1970,12 @@ export const findItemByBarcode = async (barcode, storeId = undefined) => {
   if (overrideProductCode) {
     const item = await getItemById(overrideProductCode, storeId);
     if (item) {
-      return item;
+      return applyPoTaxPriority(item, { storeId });
     }
   }
 
-  return findItemByBarcodeInProductsTable(trimmed, storeId);
+  const item = await findItemByBarcodeInProductsTable(trimmed, storeId);
+  return applyPoTaxPriority(item, { storeId });
 };
 
 const removeItemOverride = async (productCode) => {
