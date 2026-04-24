@@ -39,6 +39,7 @@ import { runStoreCodeMigration } from './repositories/storeRepository.js';
 // import { Screen, User } from './models/index.js'; #added store on new line
 import { Screen, User, Store } from './models/index.js';
 import { initializeScreens } from './services/screenService.js';
+import { ensurePurchaseOrdersTables } from './scripts/ensurePurchaseOrdersTables.js';
 
 const app = express();
 
@@ -157,6 +158,14 @@ const syncModels = async () => {
 await syncModels();
 
 await initializeScreens();
+
+// Ensure non-sequelize legacy tables exist (prevents "table doesn't exist" errors)
+try {
+  await ensurePurchaseOrdersTables();
+  console.log('✅ Purchase Orders tables ensured');
+} catch (error) {
+  console.warn('⚠️ Could not ensure Purchase Orders tables:', error?.message ?? error);
+}
 
 ensureDirectoryExists(uploadsRootDir);
 

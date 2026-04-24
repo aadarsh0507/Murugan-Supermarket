@@ -442,6 +442,9 @@ const draftTabFromApiBill = (bill) => {
 };
 
 export default function Billing() {
+  // Tax columns: show either GST only, or SGST+CGST only (not all three)
+  const SHOW_SPLIT_GST_COLUMNS = true; // set false to show only GST
+
   const initialStateRef = useRef(null);
   if (!initialStateRef.current) {
     const saved = typeof window !== "undefined" ? loadSavedState() : null;
@@ -1590,9 +1593,14 @@ export default function Billing() {
           savedBillId: nextSavedBillId,
         });
       } else {
+        // Keep the bill on screen after creating so the user can review/print.
+        // A new blank bill is created only when the user clicks "New Bill".
         updateBill(billId, {
           isSaving: false,
+          isSaved: true,
           paymentStatus,
+          savedBillNo: assignedBillNo ?? null,
+          savedBillId: nextSavedBillId,
         });
       }
 
@@ -1690,9 +1698,7 @@ export default function Billing() {
             null
         });
       } finally {
-        if (!isUpdate) {
-          closeBillAfterSave(billId);
-        }
+        // Do not auto-close newly created bills; user can click "New Bill" when ready.
       }
     };
 
@@ -1927,7 +1933,20 @@ export default function Billing() {
       });
 
       if (foundItem) {
-        const normalizedItem = normalizeItem(foundItem);
+        // GST priority: fetch from backend so PO tax_percent wins over Products/Items gstRate
+        const apiStoreId = selectedStore?._id || selectedStore?.id || selectedStore;
+        let enriched = foundItem;
+        try {
+          const res = await itemsAPI.getItemByBarcode(value, { storeId: apiStoreId });
+          const backendItem = res?.data?.item ?? res?.item ?? null;
+          if (backendItem) {
+            enriched = { ...foundItem, ...backendItem };
+          }
+        } catch {
+          // Ignore lookup errors; fallback to preloaded item gstRate
+        }
+
+        const normalizedItem = normalizeItem(enriched);
         addItemToBill(activeBillId, normalizedItem);
         toast({
           title: "Item added",
@@ -1984,7 +2003,7 @@ export default function Billing() {
   const billTotals = activeBill ? getBillTotals(activeBill) : { total: 0, subtotal: 0, discount: 0, tax: 0, savings: 0 };
 
   return (
-    <div className="relative -m-3 sm:-m-4 md:-m-6 bg-background flex flex-col overflow-hidden min-w-0" style={{ height: 'calc(100vh - 10rem)' }}>
+    <div className="relative -m-3 sm:-m-4 md:-m-6 bg-background flex flex-col overflow-hidden min-w-0 min-h-0" style={{ height: 'calc(100vh - 10rem)' }}>
       {/* Header Bar */}
       <div className="bg-primary text-primary-foreground flex flex-col border-b shadow-sm min-w-0">
         {/* Total Amount Display - Big and Prominent */}
@@ -2121,9 +2140,9 @@ export default function Billing() {
       </div>
 
       {/* Main Content Area: stack right panel below on small screens */}
-      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-w-0">
+      <div className="flex-1 flex flex-col lg:flex-row overflow-hidden min-w-0 min-h-0">
         {/* Left Panel - Items Display */}
-        <div className="flex-1 flex flex-col bg-muted/30 overflow-hidden min-w-0">
+        <div className="flex-1 flex flex-col bg-muted/30 overflow-hidden min-w-0 min-h-0">
           {/* Barcode Input Only */}
           <div className="p-3 sm:p-4 border-b bg-background shadow-sm min-w-0">
             <form onSubmit={handleBarcodeSubmit} className="flex gap-2">
@@ -2176,8 +2195,8 @@ export default function Billing() {
           </div>
 
           {/* Items Display Area - Detailed Table Format */}
-          <div className="flex-1 bg-background" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
-            <div className="flex-1 overflow-y-auto" style={{ position: 'relative' }}>
+          <div className="flex-1 bg-background min-h-0" style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+            <div className="flex-1 overflow-y-auto min-h-0" style={{ position: 'relative' }}>
               <div className="p-4" style={{ position: 'relative', overflow: 'visible' }}>
                 {/* Table Container with Horizontal Scroll */}
                 <div className="overflow-x-auto" style={{ position: 'relative' }}>
@@ -2192,10 +2211,16 @@ export default function Billing() {
                         <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">Batch</th>
                         <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">Rate</th>
                         <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">MRP</th>
+                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[70px] whitespace-nowrap align-top">Tax%</th>
                         <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">CESSAmt</th>
-                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">SGST</th>
-                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">CGST</th>
-                        <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">GST</th>
+                        {SHOW_SPLIT_GST_COLUMNS ? (
+                          <>
+                            <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">SGST</th>
+                            <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">CGST</th>
+                          </>
+                        ) : (
+                          <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[80px] whitespace-nowrap align-top">GST</th>
+                        )}
                         <th className="p-2 text-right text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">Base Amount</th>
                         <th className="p-2 text-left text-xs font-semibold text-muted-foreground min-w-[100px] whitespace-nowrap align-top">HSN Code</th>
                         <th className="p-2 text-center text-xs font-semibold text-muted-foreground min-w-[60px] whitespace-nowrap align-top">Action</th>
@@ -2311,6 +2336,13 @@ export default function Billing() {
                                 ₹{Number(line.mrp || 0).toFixed(2)}
                               </span>
                             </td>
+
+                            {/* Tax% */}
+                            <td className="p-2 text-right">
+                              <span className="text-sm text-muted-foreground">
+                                {Number(gstRate || 0).toFixed(2)}%
+                              </span>
+                            </td>
                             
                             {/* CESSAmt */}
                             <td className="p-2 text-right">
@@ -2319,26 +2351,24 @@ export default function Billing() {
                               </span>
                             </td>
                             
-                            {/* SGST */}
-                            <td className="p-2 text-right">
-                              <span className="text-sm">
-                                ₹{sgstAmount.toFixed(2)}
-                              </span>
-                            </td>
-                            
-                            {/* CGST */}
-                            <td className="p-2 text-right">
-                              <span className="text-sm">
-                                ₹{cgstAmount.toFixed(2)}
-                              </span>
-                            </td>
-                            
-                            {/* GST */}
-                            <td className="p-2 text-right">
-                              <span className="text-sm">
-                                ₹{gstAmount.toFixed(2)}
-                              </span>
-                            </td>
+                            {SHOW_SPLIT_GST_COLUMNS ? (
+                              <>
+                                {/* SGST */}
+                                <td className="p-2 text-right">
+                                  <span className="text-sm">₹{sgstAmount.toFixed(2)}</span>
+                                </td>
+
+                                {/* CGST */}
+                                <td className="p-2 text-right">
+                                  <span className="text-sm">₹{cgstAmount.toFixed(2)}</span>
+                                </td>
+                              </>
+                            ) : (
+                              /* GST */
+                              <td className="p-2 text-right">
+                                <span className="text-sm">₹{gstAmount.toFixed(2)}</span>
+                              </td>
+                            )}
                             
                             {/* Base Amount */}
                             <td className="p-2 text-right">
@@ -2777,6 +2807,27 @@ export default function Billing() {
                             }}
                           />
                         </td>
+
+                        {/* Tax% */}
+                        <td className="p-2 text-right align-top">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={newItemRow.gstRate}
+                            onChange={(event) =>
+                              setNewItemRow({ ...newItemRow, gstRate: Number(event.target.value) || 0 })
+                            }
+                            placeholder="0"
+                            className="h-8 text-sm text-right w-full block"
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") {
+                                event.preventDefault();
+                                addManualItem(activeBillId);
+                              }
+                            }}
+                          />
+                        </td>
                         
                         {/* CESSAmt */}
                         <td className="p-2 text-right align-top">
@@ -2798,65 +2849,69 @@ export default function Billing() {
                           />
                         </td>
                         
-                        {/* SGST */}
-                        <td className="p-2 text-right align-top">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={newItemRow.sgstAmount}
-                            placeholder="0.00"
-                            readOnly
-                            disabled
-                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                addManualItem(activeBillId);
-                              }
-                            }}
-                          />
-                        </td>
-                        
-                        {/* CGST */}
-                        <td className="p-2 text-right align-top">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={newItemRow.cgstAmount}
-                            placeholder="0.00"
-                            readOnly
-                            disabled
-                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                addManualItem(activeBillId);
-                              }
-                            }}
-                          />
-                        </td>
-                        
-                        {/* GST */}
-                        <td className="p-2 text-right align-top">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            value={newItemRow.gstAmount}
-                            placeholder="0.00"
-                            readOnly
-                            disabled
-                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter") {
-                                event.preventDefault();
-                                addManualItem(activeBillId);
-                              }
-                            }}
-                          />
-                        </td>
+                        {SHOW_SPLIT_GST_COLUMNS ? (
+                          <>
+                            {/* SGST */}
+                            <td className="p-2 text-right align-top">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={newItemRow.sgstAmount}
+                                placeholder="0.00"
+                                readOnly
+                                disabled
+                                className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    addManualItem(activeBillId);
+                                  }
+                                }}
+                              />
+                            </td>
+
+                            {/* CGST */}
+                            <td className="p-2 text-right align-top">
+                              <Input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={newItemRow.cgstAmount}
+                                placeholder="0.00"
+                                readOnly
+                                disabled
+                                className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    addManualItem(activeBillId);
+                                  }
+                                }}
+                              />
+                            </td>
+                          </>
+                        ) : (
+                          /* GST */
+                          <td className="p-2 text-right align-top">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={newItemRow.gstAmount}
+                              placeholder="0.00"
+                              readOnly
+                              disabled
+                              className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  addManualItem(activeBillId);
+                                }
+                              }}
+                            />
+                          </td>
+                        )}
                         
                         {/* Base Amount */}
                         <td className="p-2 text-right align-top">
@@ -2914,8 +2969,8 @@ export default function Billing() {
         </div>
 
         {/* Right Panel - Payment & Summary */}
-        <div className="w-full lg:w-96 flex-shrink-0 lg:flex-shrink-0 bg-background border-t lg:border-t-0 lg:border-l flex flex-col overflow-hidden min-w-0">
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6">
+        <div className="w-full lg:w-96 flex-shrink-0 lg:flex-shrink-0 bg-background border-t lg:border-t-0 lg:border-l flex flex-col overflow-hidden min-w-0 min-h-0">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 space-y-4 sm:space-y-6 min-h-0">
             {/* Discount & Tax - At Top */}
             <Card>
               <CardHeader>

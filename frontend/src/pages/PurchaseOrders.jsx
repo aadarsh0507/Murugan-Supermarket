@@ -88,6 +88,7 @@ const EMPTY_ITEM_TEMPLATE = {
   itemId: "",
   categoryName: "",
   subcategoryName: "",
+  hsnCode: "",
   poQty: 0,
   discountType: '%',
   disPercent: 0,
@@ -669,6 +670,9 @@ const PurchaseOrders = () => {
     // Populate the target row (index is already the correct row - new row created in searchItems if needed)
     const listCost = Number(suggestion.cost || 0);
     const listSale = Number(suggestion.price || suggestion.sellingPrice || 0);
+    const listGst = Number(
+      suggestion.gstRate ?? suggestion.gst_rate ?? suggestion.taxRate ?? suggestion.tax_rate ?? 0
+    );
     const pickPrice = (n) => (Number.isFinite(n) && n > 0 ? n : "");
     const purchaseVal = pickPrice(listCost || listSale);
     const costVal = pickPrice(listCost || listSale);
@@ -686,6 +690,22 @@ const PurchaseOrders = () => {
       itemId: suggestion._id || '',
       categoryName: suggestion.category || '',
       subcategoryName: suggestion.subcategory || '',
+      hsnCode:
+        suggestion.hsnCode ||
+        suggestion.hsnNumber ||
+        suggestion.hsn_number ||
+        suggestion.CommodityCode ||
+        items[index]?.hsnCode ||
+        '',
+      // Store tax % in PO line item. If user already set a value, keep it.
+      taxPercent:
+        items[index]?.taxPercent !== undefined &&
+        items[index]?.taxPercent !== null &&
+        String(items[index]?.taxPercent) !== ''
+          ? items[index]?.taxPercent
+          : Number.isFinite(listGst) && listGst > 0
+            ? String(listGst)
+            : '',
     };
     const poQty = items[index].poQty || 0;
     const unitPurchase = priceToNumber(items[index].purchasePrice);
@@ -924,6 +944,7 @@ const PurchaseOrders = () => {
         if (item.unit && item.unit.trim() !== "") itemData.unit = item.unit;
         if (item.categoryName && item.categoryName.trim() !== "") itemData.categoryName = item.categoryName;
         if (item.subcategoryName && item.subcategoryName.trim() !== "") itemData.subcategoryName = item.subcategoryName;
+        if (item.hsnCode && String(item.hsnCode).trim() !== "") itemData.hsnNumber = String(item.hsnCode).trim();
 
         // Include discount and tax fields
         if (item.discountType) itemData.discountType = item.discountType;
@@ -2012,6 +2033,7 @@ const PurchaseOrders = () => {
                     <TableHead className="text-white w-14">S.no</TableHead>
                     <TableHead className="text-white w-64">Product Name</TableHead>
                     <TableHead className="text-white w-20">Quantity</TableHead>
+                    <TableHead className="text-white w-28">HSN</TableHead>
                     <TableHead className="text-white min-w-[8rem]">Purchase Price</TableHead>
                     <TableHead className="text-white min-w-[11rem]">Discount</TableHead>
                     <TableHead className="text-white min-w-[7rem]">Tax</TableHead>
@@ -2278,6 +2300,15 @@ const PurchaseOrders = () => {
                           value={item.poQty || ''}
                           onChange={(e) => updateItem(index, 'poQty', parseFloat(e.target.value) || 0)}
                           className="w-full"
+                        />
+                      </TableCell>
+                      <TableCell className="min-w-[8rem]">
+                        <Input
+                          value={item.hsnCode || ""}
+                          onChange={(e) => updateItem(index, "hsnCode", e.target.value)}
+                          placeholder="HSN"
+                          className="w-full"
+                          inputMode="numeric"
                         />
                       </TableCell>
                       <TableCell className="min-w-[7rem]">

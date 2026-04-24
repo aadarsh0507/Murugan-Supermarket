@@ -8,6 +8,7 @@
     "start": "node server.js",
     "dev": "nodemon server.js",
     "create-admin": "node scripts/createAdmin.js",
+    "ensure-po-tables": "node scripts/ensurePurchaseOrdersTables.js",
     "migrate-schema": "node scripts/migrateSchema.js",
     "fix-supplier-code": "node scripts/fixSupplierCodeColumn.js",
     "add-store-id-categories": "node scripts/addStoreIdToCategories.js",
