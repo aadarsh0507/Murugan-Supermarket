@@ -2785,11 +2785,10 @@ export default function Billing() {
                             step="0.01"
                             min="0"
                             value={newItemRow.cessAmount}
-                            onChange={(event) =>
-                              setNewItemRow({ ...newItemRow, cessAmount: Number(event.target.value) || 0 })
-                            }
                             placeholder="0.00"
-                            className="h-8 text-sm text-right w-full block"
+                            readOnly
+                            disabled
+                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -2806,11 +2805,10 @@ export default function Billing() {
                             step="0.01"
                             min="0"
                             value={newItemRow.sgstAmount}
-                            onChange={(event) =>
-                              setNewItemRow({ ...newItemRow, sgstAmount: Number(event.target.value) || 0 })
-                            }
                             placeholder="0.00"
-                            className="h-8 text-sm text-right w-full block"
+                            readOnly
+                            disabled
+                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -2827,11 +2825,10 @@ export default function Billing() {
                             step="0.01"
                             min="0"
                             value={newItemRow.cgstAmount}
-                            onChange={(event) =>
-                              setNewItemRow({ ...newItemRow, cgstAmount: Number(event.target.value) || 0 })
-                            }
                             placeholder="0.00"
-                            className="h-8 text-sm text-right w-full block"
+                            readOnly
+                            disabled
+                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();
@@ -2848,11 +2845,10 @@ export default function Billing() {
                             step="0.01"
                             min="0"
                             value={newItemRow.gstAmount}
-                            onChange={(event) =>
-                              setNewItemRow({ ...newItemRow, gstAmount: Number(event.target.value) || 0 })
-                            }
                             placeholder="0.00"
-                            className="h-8 text-sm text-right w-full block"
+                            readOnly
+                            disabled
+                            className="h-8 text-sm text-right w-full block bg-muted cursor-not-allowed"
                             onKeyDown={(event) => {
                               if (event.key === "Enter") {
                                 event.preventDefault();

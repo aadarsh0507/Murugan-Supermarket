@@ -11,6 +11,11 @@ import {
   getItemByBarcode,
 } from '../controllers/itemController.js';
 import { importProductsCsv } from '../controllers/devProductsController.js';
+import {
+  importSuppliersCsv,
+  importCustomersCsv,
+  importCategoriesCsv,
+} from '../controllers/devEntityImportController.js';
 
 const router = express.Router();
 
@@ -34,6 +39,11 @@ router.post('/products', createItem);
 router.post('/products/import-csv', csvUpload.single('file'), importProductsCsv);
 router.put('/products/:id', updateItem);
 router.delete('/products/:id', deleteItem);
+
+// Other master-data CSV imports (dev-only)
+router.post('/suppliers/import-csv', csvUpload.single('file'), importSuppliersCsv);
+router.post('/customers/import-csv', csvUpload.single('file'), importCustomersCsv);
+router.post('/categories/import-csv', csvUpload.single('file'), importCategoriesCsv);
 
 export default router;
 

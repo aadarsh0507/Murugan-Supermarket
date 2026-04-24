@@ -53,6 +53,27 @@ function parseDateSafe(isoStr) {
   }
 }
 
+/** Move focus to the next editable control in a form (Enter key). */
+function focusNextFieldInForm(form, activeElement) {
+  const selector =
+    'input:not([type="hidden"]):not([type="file"]):not([disabled]):not([readonly]), textarea:not([disabled]), button[role="combobox"]:not([disabled])';
+  const fields = Array.from(form.querySelectorAll(selector));
+  const i = fields.indexOf(activeElement);
+  if (i === -1 || i >= fields.length - 1) return;
+  const next = fields[i + 1];
+  next?.focus?.();
+  if (next?.tagName === "INPUT" && typeof next.select === "function") {
+    const ty = next.type || "text";
+    if (["text", "search", "tel", "url", "number"].includes(ty)) {
+      try {
+        next.select();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 /** Treat blank price fields as 0 for math; keep '' in state for empty inputs */
 const priceToNumber = (v) => {
   if (v === "" || v === null || v === undefined) return 0;
@@ -95,6 +116,7 @@ const PurchaseOrders = () => {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [itemSuggestions, setItemSuggestions] = useState({}); // rowIndex -> items list
   const [openSuggestIndex, setOpenSuggestIndex] = useState(null);
+  const [suggestHighlightIndex, setSuggestHighlightIndex] = useState(0);
   const [dropdownLayout, setDropdownLayout] = useState({
     top: 0,
     left: 0,
@@ -102,6 +124,8 @@ const PurchaseOrders = () => {
     placement: "bottom"
   });
   const inputRefs = useRef({});
+  const qtyInputRefs = useRef({});
+  const suggestionItemRefs = useRef({});
   const lastBarcodeScanRef = useRef({ barcode: '', time: 0 });
   const SCAN_DEBOUNCE_MS = 1800;
   const [showBarcodeModal, setShowBarcodeModal] = useState(false);
@@ -129,11 +153,52 @@ const PurchaseOrders = () => {
     isCredit: false
   });
 
+  const openSuggestions =
+    openSuggestIndex === null || openSuggestIndex === undefined
+      ? []
+      : (itemSuggestions[openSuggestIndex] || []);
+
+  // Reset highlight to top when results or dropdown visibility change
+  useEffect(() => {
+    setSuggestHighlightIndex(0);
+  }, [openSuggestIndex, openSuggestions.length]);
+
+  // Scroll highlighted suggestion into view when navigating with arrows
+  useEffect(() => {
+    if (openSuggestIndex === null || openSuggestIndex === undefined) return;
+    if (openSuggestions.length === 0) return;
+    suggestionItemRefs.current?.[openSuggestIndex]?.[suggestHighlightIndex]?.scrollIntoView?.({
+      block: "nearest",
+      behavior: "auto"
+    });
+  }, [openSuggestIndex, suggestHighlightIndex, openSuggestions.length]);
+
+  const handlePoFormKeyDown = (event) => {
+    if (event.key !== "Enter") return;
+    if (event.defaultPrevented) return;
+    const target = event.target;
+    if (!target) return;
+    if (target.dataset?.skipEnterNext === "true") return;
+
+    const isTextarea = target.tagName === "TEXTAREA";
+    const isTextLikeInput =
+      target.tagName === "INPUT" &&
+      !["file", "hidden", "checkbox", "radio", "button", "submit", "reset", "image"].includes(
+        target.type
+      );
+    const isComboboxTrigger =
+      target.tagName === "BUTTON" && target.getAttribute("role") === "combobox";
+    if (!isTextLikeInput && !isComboboxTrigger && !isTextarea) return;
+    if (target.disabled || target.readOnly) return;
+
+    event.preventDefault();
+    focusNextFieldInForm(event.currentTarget, target);
+  };
+
   // Load data when component mounts or when selected store changes
   useEffect(() => {
     if (selectedStore?._id || selectedStore?.id) {
-      const storeId = selectedStore._id ?? selectedStore.id;
-      loadData(storeId);
+      loadData();
     } else {
       setLoadError("Select a store to begin creating a purchase order.");
     }
@@ -308,15 +373,13 @@ const PurchaseOrders = () => {
     });
   };
 
-  const loadData = async (storeIdToFilter = null) => {
+  const loadData = async () => {
     // Don't load if no store is selected
     const resolvedStoreId = selectedStore?._id ?? selectedStore?.id;
     if (!resolvedStoreId) {
       return;
     }
-
-    // Use provided storeIdToFilter or fall back to formData.store or selectedStore
-    const filterStoreId = storeIdToFilter ?? formData.store ?? resolvedStoreId;
+    const filterStoreId = resolvedStoreId;
 
     setLoading(true);
     setLoadError(null);
@@ -338,7 +401,7 @@ const PurchaseOrders = () => {
         storesRes ??
         [];
 
-      // Filter suppliers based on the selected store
+      // Filter suppliers based on the header-selected store
       const allSuppliers = Array.isArray(supplierList) ? supplierList : [];
       const filteredSuppliers = filterStoreId 
         ? filterSuppliersByStore(allSuppliers, filterStoreId)
@@ -650,21 +713,21 @@ const PurchaseOrders = () => {
   const handleBarcodeScan = async (barcode) => {
     const trimmedBarcode = barcode.trim();
     if (!trimmedBarcode || trimmedBarcode.length < 2) {
-      return;
+      return null;
     }
     const now = Date.now();
     if (
       lastBarcodeScanRef.current.barcode === trimmedBarcode &&
       now - lastBarcodeScanRef.current.time < SCAN_DEBOUNCE_MS
     ) {
-      return;
+      return null;
     }
     lastBarcodeScanRef.current = { barcode: trimmedBarcode, time: now };
 
     const isLikelyBarcode = trimmedBarcode.length >= 6 && /^[A-Za-z0-9\-]+$/.test(trimmedBarcode);
 
     if (!isLikelyBarcode) {
-      return;
+      return null;
     }
 
     // Find item by SKU/barcode
@@ -678,7 +741,7 @@ const PurchaseOrders = () => {
         description: `No item found with barcode: ${trimmedBarcode}`,
         variant: "destructive"
       });
-      return;
+      return null;
     }
 
     // Check if this item already exists in the table
@@ -704,6 +767,7 @@ const PurchaseOrders = () => {
         title: "Item already exists",
         description: "Item is already in the table (highlighted)",
       });
+      return existingRowIndex;
     } else {
       // Different item - add to new row
       const lastRowIndex = formData.items.length - 1;
@@ -731,6 +795,7 @@ const PurchaseOrders = () => {
           rowElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
       }, 100);
+      return targetIndex;
     }
   };
 
@@ -1690,7 +1755,7 @@ const PurchaseOrders = () => {
       </Card>
 
       {/* Main Form */}
-      <form id="poForm" onSubmit={handleSubmit}>
+      <form id="poForm" onSubmit={handleSubmit} onKeyDownCapture={handlePoFormKeyDown}>
         <Card className="overflow-hidden">
           <CardContent className="pt-4 pb-4 px-3 sm:pt-6 sm:pb-6 sm:px-6">
             {loadError && (
@@ -1698,8 +1763,8 @@ const PurchaseOrders = () => {
                 {loadError}
               </div>
             )}
-            {/* Minimal fields: Supplier, Store, date, batch/invoice */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+            {/* Minimal fields: Supplier, date, batch/invoice */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
               <div>
                 <Label>Supplier Name</Label>
                 <Select
@@ -1739,32 +1804,6 @@ const PurchaseOrders = () => {
                     {(suppliers || []).map((s) => (
                       <SelectItem key={s._id || s.id} value={String(s._id || s.id)}>
                         {s.companyName || s.name || 'Unnamed Supplier'}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Store</Label>
-                <Select
-                  value={formData.store ? String(formData.store) : ""}
-                  onValueChange={(v) => {
-                    setFormData({ ...formData, store: v, supplier: "", supplierName: "", supplierDetails: null });
-                    // Reload suppliers filtered by the new store
-                    loadData(v);
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder={stores?.length ? "Select store" : "No stores"}>
-                      {formData.store
-                        ? (stores?.find((s) => String(s._id || s.id) === String(formData.store))?.name || 'Selected store')
-                        : null}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent className="z-[10000] max-h-[300px]">
-                    {(stores || []).map((s) => (
-                      <SelectItem key={s._id || s.id} value={String(s._id || s.id)}>
-                        {s.name || 'Unnamed Store'}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -1934,6 +1973,7 @@ const PurchaseOrders = () => {
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center min-w-0">
                 <Input
+                  data-skip-enter-next="true"
                   placeholder="Scan barcode to add item..."
                   value={barcodeScannerValue}
                   onChange={async (e) => {
@@ -1945,7 +1985,15 @@ const PurchaseOrders = () => {
                       e.preventDefault();
                       const value = barcodeScannerValue;
                       setBarcodeScannerValue('');
-                      await handleBarcodeScan(value);
+                      const rowIndex = await handleBarcodeScan(value);
+                      if (rowIndex !== null && rowIndex !== undefined) {
+                        setOpenSuggestIndex(rowIndex);
+                        setItemSuggestions((prev) => ({ ...prev, [rowIndex]: allItems }));
+                        setTimeout(() => {
+                          inputRefs.current?.[rowIndex]?.focus?.();
+                          inputRefs.current?.[rowIndex]?.select?.();
+                        }, 0);
+                      }
                     }
                   }}
                   className="w-full min-w-0 sm:w-64 pl-3"
@@ -1965,8 +2013,8 @@ const PurchaseOrders = () => {
                     <TableHead className="text-white w-64">Product Name</TableHead>
                     <TableHead className="text-white w-20">Quantity</TableHead>
                     <TableHead className="text-white min-w-[8rem]">Purchase Price</TableHead>
-                    <TableHead className="text-white min-w-[7rem]">Tax</TableHead>
                     <TableHead className="text-white min-w-[11rem]">Discount</TableHead>
+                    <TableHead className="text-white min-w-[7rem]">Tax</TableHead>
                     <TableHead className="text-white min-w-[8rem]">Cost Price</TableHead>
                     <TableHead className="text-white min-w-[8rem]">Sales Price</TableHead>
                     <TableHead className="text-white min-w-[8rem]">MRP</TableHead>
@@ -1987,6 +2035,7 @@ const PurchaseOrders = () => {
                       <TableCell className="relative overflow-visible min-w-[22rem]">
                         <div className="suggestions-dropdown relative w-full max-w-[24rem]">
                           <Input
+                            data-skip-enter-next="true"
                             ref={(el) => (inputRefs.current[index] = el)}
                             placeholder="Search Product Name / SKU / Barcode"
                             value={item.particulars}
@@ -2039,6 +2088,42 @@ const PurchaseOrders = () => {
                               searchItems(index, inputValue);
                             }}
                             onKeyDown={(e) => {
+                              if (
+                                openSuggestIndex === index &&
+                                (itemSuggestions[index]?.length || 0) > 0
+                              ) {
+                                const len = itemSuggestions[index].length || 0;
+                                if (e.key === "ArrowDown") {
+                                  e.preventDefault();
+                                  setSuggestHighlightIndex((i) => Math.min(i + 1, len - 1));
+                                  return;
+                                }
+                                if (e.key === "ArrowUp") {
+                                  e.preventDefault();
+                                  setSuggestHighlightIndex((i) => Math.max(i - 1, 0));
+                                  return;
+                                }
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  const picked =
+                                    itemSuggestions[index][suggestHighlightIndex] ||
+                                    itemSuggestions[index][0];
+                                  if (picked) {
+                                    chooseSuggestion(index, picked);
+                                    setTimeout(() => {
+                                      qtyInputRefs.current?.[index]?.focus?.();
+                                      qtyInputRefs.current?.[index]?.select?.();
+                                    }, 0);
+                                  }
+                                  return;
+                                }
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  setOpenSuggestIndex(null);
+                                  return;
+                                }
+                              }
+
                               // Handle Enter key for barcode scanners
                               if (e.key === 'Enter' && item.particulars.trim()) {
                                 e.preventDefault();
@@ -2156,8 +2241,21 @@ const PurchaseOrders = () => {
                                   <button
                                     key={s._id || suggestionIndex}
                                     type="button"
-                                    className="w-full px-4 py-3 text-left hover:bg-primary/5 focus-visible:outline-none"
-                                    onClick={() => chooseSuggestion(index, s)}
+                                    ref={(el) => {
+                                      if (!suggestionItemRefs.current[index]) {
+                                        suggestionItemRefs.current[index] = [];
+                                      }
+                                      suggestionItemRefs.current[index][suggestionIndex] = el;
+                                    }}
+                                    className={`w-full px-4 py-3 text-left hover:bg-primary/5 focus-visible:outline-none ${suggestionIndex === suggestHighlightIndex ? "bg-primary/10" : ""}`}
+                                    onMouseDown={(ev) => ev.preventDefault()}
+                                    onClick={() => {
+                                      chooseSuggestion(index, s);
+                                      setTimeout(() => {
+                                        qtyInputRefs.current?.[index]?.focus?.();
+                                        qtyInputRefs.current?.[index]?.select?.();
+                                      }, 0);
+                                    }}
                                   >
                                     <p className="text-sm font-medium text-slate-900">{s.name}</p>
                                     {(s.sku || s.price) && (
@@ -2175,6 +2273,7 @@ const PurchaseOrders = () => {
                       </TableCell>
                       <TableCell className="min-w-[7rem]">
                         <Input
+                          ref={(el) => (qtyInputRefs.current[index] = el)}
                           type="number"
                           value={item.poQty || ''}
                           onChange={(e) => updateItem(index, 'poQty', parseFloat(e.target.value) || 0)}
@@ -2202,26 +2301,6 @@ const PurchaseOrders = () => {
                             className="w-full pl-6"
                           />
                         </div>
-                      </TableCell>
-                      <TableCell className="min-w-[7rem]">
-                        <Select
-                          value={
-                            item.taxPercent === "" || item.taxPercent == null
-                              ? undefined
-                              : String(item.taxPercent)
-                          }
-                          onValueChange={(v) => updateItem(index, "taxPercent", parseFloat(v) || 0)}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Tax %" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="0">0%</SelectItem>
-                            <SelectItem value="5">5%</SelectItem>
-                            <SelectItem value="18">18%</SelectItem>
-                            <SelectItem value="28">28%</SelectItem>
-                          </SelectContent>
-                        </Select>
                       </TableCell>
                       <TableCell className="min-w-[11rem]">
                         <div className="flex items-center gap-2">
@@ -2264,6 +2343,26 @@ const PurchaseOrders = () => {
                             </div>
                           )}
                         </div>
+                      </TableCell>
+                      <TableCell className="min-w-[7rem]">
+                        <Select
+                          value={
+                            item.taxPercent === "" || item.taxPercent == null
+                              ? undefined
+                              : String(item.taxPercent)
+                          }
+                          onValueChange={(v) => updateItem(index, "taxPercent", parseFloat(v) || 0)}
+                        >
+                          <SelectTrigger className="w-full">
+                            <SelectValue placeholder="Tax %" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="0">0%</SelectItem>
+                            <SelectItem value="5">5%</SelectItem>
+                            <SelectItem value="18">18%</SelectItem>
+                            <SelectItem value="28">28%</SelectItem>
+                          </SelectContent>
+                        </Select>
                       </TableCell>
                       <TableCell className="min-w-[7rem]">
                         <div className="relative">

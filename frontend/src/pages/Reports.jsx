@@ -247,8 +247,6 @@ export default function Reports() {
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [selectedSupplierId, setSelectedSupplierId] = useState("all");
-  const [stores, setStores] = useState([]);
-  const [selectedStoreId, setSelectedStoreId] = useState("all");
   const [poReportData, setPoReportData] = useState(null);
   const [poReportType, setPoReportType] = useState("monthly"); // "monthly", "daily", "supplierwise", "storewise", "invoices"
   const [activeTab, setActiveTab] = useState("sales"); // "sales", "purchase", or "credits"
@@ -304,7 +302,6 @@ export default function Reports() {
       if (saved.dateTo) setDateTo(normalizeReportDateInput(saved.dateTo) || saved.dateTo);
       if (saved.selectedUserId) setSelectedUserId(saved.selectedUserId);
       if (saved.selectedSupplierId) setSelectedSupplierId(saved.selectedSupplierId);
-      if (saved.selectedStoreId) setSelectedStoreId(saved.selectedStoreId);
       if (saved.invoiceReportSearch) setInvoiceReportSearch(saved.invoiceReportSearch);
       else if (saved.stockSearch) setInvoiceReportSearch(saved.stockSearch);
       if (saved.selectedCreditSupplierId) setSelectedCreditSupplierId(saved.selectedCreditSupplierId);
@@ -320,7 +317,6 @@ export default function Reports() {
 
     loadUsers();
     loadSuppliers();
-    loadStores();
     // Report data will be loaded by the useEffect when selectedStore is available
     if (activeTab === "purchase") {
       loadPOReportData();
@@ -347,7 +343,6 @@ export default function Reports() {
       dateTo,
       selectedUserId,
       selectedSupplierId,
-      selectedStoreId,
       invoiceReportSearch,
       selectedCreditSupplierId,
       creditStatusFilter,
@@ -357,7 +352,7 @@ export default function Reports() {
       returnsStatusFilter,
     };
     localStorage.setItem('reports_filters', JSON.stringify(toSave));
-  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, selectedStoreId, invoiceReportSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
+  }, [activeTab, reportType, poReportType, poViewMode, dateFrom, dateTo, selectedUserId, selectedSupplierId, invoiceReportSearch, selectedCreditSupplierId, creditStatusFilter, creditViewMode, creditTypeFilter, ordersStatusFilter, returnsStatusFilter]);
 
   // Store for reports: header picker first, then profile/JWT store (sidebar can show "Select Store" while user still has a default store)
   const storeIdForEffect =
@@ -400,7 +395,7 @@ export default function Reports() {
     if (activeTab === "returns") {
       loadReturnsReportData();
     }
-  }, [dateFrom, dateTo, selectedSupplierId, selectedStoreId, invoiceReportSearch, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter, storeIdForEffect, user]);
+  }, [dateFrom, dateTo, selectedSupplierId, invoiceReportSearch, poReportType, selectedCreditSupplierId, creditStatusFilter, creditTypeFilter, creditViewMode, activeTab, ordersStatusFilter, returnsStatusFilter, storeIdForEffect, user]);
 
   const loadUsers = async () => {
     try {
@@ -418,16 +413,6 @@ export default function Reports() {
       setSuppliers(suppliersData);
     } catch (error) {
       console.error("Error loading suppliers:", error);
-    }
-  };
-
-  const loadStores = async () => {
-    try {
-      const response = await suppliersAPI.getStores();
-      const storesData = response.data || [];
-      setStores(storesData);
-    } catch (error) {
-      console.error("Error loading stores:", error);
     }
   };
 
@@ -681,8 +666,9 @@ export default function Reports() {
       if (selectedSupplierId && selectedSupplierId !== "all") {
         params.supplierId = selectedSupplierId;
       }
-      if (selectedStoreId && selectedStoreId !== "all") {
-        params.storeId = selectedStoreId;
+      // Reports are always scoped to the header-selected store.
+      if (storeIdForEffect) {
+        params.storeId = storeIdForEffect;
       }
       if (poReportType === "invoices" && invoiceReportSearch.trim()) {
         params.search = invoiceReportSearch.trim();
@@ -1928,22 +1914,6 @@ export default function Reports() {
                           {suppliers.map((supplier) => (
                             <SelectItem key={supplier._id} value={supplier._id}>
                               {supplier.companyName}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="store">Store</Label>
-                      <Select value={selectedStoreId} onValueChange={setSelectedStoreId}>
-                        <SelectTrigger id="store">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="all">All Stores</SelectItem>
-                          {stores.map((store) => (
-                            <SelectItem key={store._id} value={store._id}>
-                              {store.name}
                             </SelectItem>
                           ))}
                         </SelectContent>
