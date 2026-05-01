@@ -107,6 +107,12 @@ export const createPurchaseOrder = async (req, res) => {
     });
   } catch (error) {
     console.error('Create purchase order error:', error);
+    if (error?.code === 'DUPLICATE_INVOICE_NUMBER' || error?.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({
+        status: 'error',
+        message: error.message || 'Invoice number already exists.',
+      });
+    }
     res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to create purchase order.',
@@ -215,6 +221,12 @@ export const updatePurchaseOrder = async (req, res) => {
     res.json(purchaseOrder);
   } catch (error) {
     console.error('Update purchase order error:', error);
+    if (error?.code === 'DUPLICATE_INVOICE_NUMBER' || error?.code === 'ER_DUP_ENTRY') {
+      return res.status(400).json({
+        status: 'error',
+        message: error.message || 'Invoice number already exists.',
+      });
+    }
     res.status(500).json({
       status: 'error',
       message: error.message || 'Failed to update purchase order.',

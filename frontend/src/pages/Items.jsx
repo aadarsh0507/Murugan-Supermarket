@@ -996,7 +996,8 @@ export default function Items() {
       unit: item.unit || "",
       categoryId: item.categoryId ? String(item.categoryId) : "",
       subcategoryId: item.subcategoryId ? String(item.subcategoryId) : "",
-      barcode: item.barcode || "",
+      // In edit screen, barcode should show/track SKU series
+      barcode: item.sku || item.itemCode || item.barcode || "",
       hsnCode: item.hsnCode || "",
       gstRate:
         item.gstRate !== undefined && item.gstRate !== null
@@ -1567,16 +1568,6 @@ export default function Items() {
     }
 
     const selectedBatch = itemBatches[selectedBatchIndex];
-    
-    // Check if we have barcode data
-    if (!selectedBatch.barcodes || selectedBatch.barcodes.length === 0) {
-      toast({
-        title: "Error",
-        description: "No barcodes available for this batch. Please wait for barcodes to load.",
-        variant: "destructive"
-      });
-      return;
-    }
 
     // Wait longer for DOM to be ready, then print directly in double mode
     // Give more time for labels to render with their individual data and barcodes
@@ -1674,102 +1665,61 @@ export default function Items() {
     };
     
     // Generate labels from barcode data with barcode images
-    // Use item-specific data from each barcode item if available
     console.log('Generating labels for batch:', selectedBatch);
-    console.log('Barcodes to print:', selectedBatch.barcodes);
-    
-    selectedBatch.barcodes.forEach((barcodeItem, index) => {
-      const barcodeValue = barcodeItem.barcode || barcodeItem;
-      
-      // Use item-specific data from barcode item, fallback to batch/default data
-      // First try the stored properties we set when loading barcodes
-      let itemName = barcodeItem.itemName || barcodeItem.name;
-      let sku = barcodeItem.itemSku || barcodeItem.sku;
-      
-      // If not found, try the group data we stored
-      if (!itemName && barcodeItem._groupData) {
-        itemName = barcodeItem._groupData.itemName || barcodeItem._groupData.name;
-      }
-      if (!sku && barcodeItem._groupData) {
-        sku = barcodeItem._groupData.itemSku || barcodeItem._groupData.sku;
-      }
-      
-      // Final fallback to batch/default data
-      itemName = itemName || defaultItemName;
-      sku = sku || defaultSku;
-      
-      // For barcode generation, use SKU if available, otherwise use barcode value
-      const barcodeToShow = sku || String(barcodeValue);
-      // For display, always show SKU if available, otherwise show barcode
-      const skuToDisplay = sku || String(barcodeValue);
-      
-      // Get expiry date, price, and batch number with proper fallbacks
-      // Use the stored group data if available
-      let expiryDate = barcodeItem.expiryDate;
-      let price = barcodeItem.amount || barcodeItem.costPrice;
-      let batchNumber = barcodeItem.batchNumber;
-      
-      // Try group data if available (stored when loading barcodes)
-      if (barcodeItem._groupData) {
-        if (!expiryDate) expiryDate = barcodeItem._groupData.expiryDate;
-        if (!price) price = barcodeItem._groupData.amount || barcodeItem._groupData.costPrice;
-        if (!batchNumber) batchNumber = barcodeItem._groupData.batchNumber;
-      }
-      
-      // Final fallback to defaults
-      expiryDate = expiryDate || defaultExpiryDate;
-      price = price || defaultPrice;
-      batchNumber = batchNumber || defaultBatchNumber;
-      
-      const formattedExpiryDate = formatDate(expiryDate);
-      const priceText = price ? `Rs. ${Number(price).toFixed(2)}` : '';
-      const invoiceOrBatch =
-        (selectedBatch?.invoiceNumber || '').toString().trim() ||
-        (batchNumber || '').toString().trim();
-      const batchText = invoiceOrBatch ? `Invoice: ${invoiceOrBatch}` : '';
-      const storeName = defaultStoreName;
-      
-      // Debug logging for each label - log all labels to see the data
-      console.log(`Label ${index}:`, {
-        barcodeValue,
-        itemName,
-        sku,
-        barcodeToShow,
-        expiryDate: formattedExpiryDate,
-        price,
-        batchNumber,
-        'has _groupData': !!barcodeItem._groupData,
-        'barcodeItem keys': Object.keys(barcodeItem),
-        'barcodeItem': barcodeItem
-      });
-      
-      // Generate barcode image from data
-      const barcodeImage = generateBarcodeImage(barcodeToShow);
-      
-      const barcodeImgTag = barcodeImage 
-        ? `<img src="${barcodeImage}" class="barcode-image" alt="Barcode" />`
-        : `<div class="barcode-placeholder"><span>${barcodeToShow}</span></div>`;
-      
+    const itemName = defaultItemName;
+    const sku = defaultSku;
+    const barcodeToShow = sku;
+
+    const expiryDate = defaultExpiryDate;
+    const price = defaultPrice;
+    const batchNumber = defaultBatchNumber;
+
+    const formattedExpiryDate = formatDate(expiryDate);
+    const priceText = price ? `Rs. ${Number(price).toFixed(2)}` : '';
+    const invoiceOrBatch =
+      (selectedBatch?.invoiceNumber || '').toString().trim() ||
+      (batchNumber || '').toString().trim();
+    const batchText = invoiceOrBatch ? `Invoice: ${invoiceOrBatch}` : '';
+    const storeName = defaultStoreName;
+
+    const qtyFromBatch = Number(
+      selectedBatch?.batchQuantity ??
+        selectedBatch?.quantity ??
+        (Array.isArray(selectedBatch?.barcodes) ? selectedBatch.barcodes.length : 0) ??
+        0
+    );
+    const labelCountRaw =
+      Number.isFinite(qtyFromBatch) && qtyFromBatch > 0 ? Math.floor(qtyFromBatch) : 1;
+    const labelCount = Math.min(Math.max(labelCountRaw, 1), 200);
+
+    console.log(`Printing ${labelCount} label(s) for SKU:`, barcodeToShow);
+
+    const barcodeImage = generateBarcodeImage(barcodeToShow);
+    const barcodeImgTag = barcodeImage
+      ? `<img src="${barcodeImage}" class="barcode-image" alt="Barcode" />`
+      : `<div class="barcode-placeholder"><span>${barcodeToShow}</span></div>`;
+
+    for (let index = 0; index < labelCount; index += 1) {
       labelsHTML += `
-        <div class="barcode-label-container">
-          <div class="barcode-label-wrapper">
-            <div class="store-name">${storeName}</div>
-            <div class="barcode-section">
-              ${barcodeImgTag}
-              ${barcodeToShow ? `<div class="sku-text">${barcodeToShow}</div>` : ''}
-            </div>
-            <div class="item-details">
-              <div class="item-name">${itemName || 'Item Name'}</div>
-              ${batchText ? `<div class="batch-text">${batchText}</div>` : ''}
-              <div class="expiry-price">
-                <span>EXP: ${formattedExpiryDate || 'N/A'}</span>
-                ${priceText ? `<span>${priceText}</span>` : '<span>Rs. 0.00</span>'}
+          <div class="barcode-label-container">
+            <div class="barcode-label-wrapper">
+              <div class="store-name">${storeName}</div>
+              <div class="barcode-section">
+                ${barcodeImgTag}
+                ${barcodeToShow ? `<div class="sku-text">${barcodeToShow}</div>` : ''}
+              </div>
+              <div class="item-details">
+                <div class="item-name">${itemName || 'Item Name'}</div>
+                ${batchText ? `<div class="batch-text">${batchText}</div>` : ''}
+                <div class="expiry-price">
+                  <span>EXP: ${formattedExpiryDate || 'N/A'}</span>
+                  ${priceText ? `<span>${priceText}</span>` : '<span>Rs. 0.00</span>'}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      `;
-    });
+        `;
+    }
 
     // Determine page size and label dimensions based on mode
     // Paper Type: Roll Paper
@@ -3613,17 +3563,12 @@ export default function Items() {
               <h3 className="text-lg font-semibold">Additional Information</h3>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="edit-item-barcode">Barcode</Label>
+                  <Label htmlFor="edit-item-barcode">Barcode (SKU)</Label>
                   <Input
                     id="edit-item-barcode"
                     value={editForm.barcode}
-                    onChange={handleFormChange('barcode')}
-                    onPaste={(e) => {
-                      e.preventDefault();
-                      const pasted = (e.clipboardData?.getData?.('text') || '').trim();
-                      if (pasted) setEditForm((prev) => ({ ...prev, barcode: pasted }));
-                    }}
-                    placeholder="Enter barcode"
+                    readOnly
+                    placeholder="Auto-filled from SKU"
                   />
                 </div>
                 <div className="space-y-2">
@@ -4057,31 +4002,52 @@ export default function Items() {
                                 }
                               `}</style>
                               <div className="flex flex-col gap-4 items-center print:block print:gap-0">
-                                {selectedBatch.barcodes.map((barcodeItem, barcodeIndex) => {
-                                  // Use individual item data from barcodeItem if available, otherwise use batch data
-                                  const itemName = barcodeItem.itemName || barcodeItem.name || selectedBatch.itemName || editingItem?.name;
-                                  const sku = barcodeItem.itemSku || barcodeItem.sku || selectedBatch.sku || editingItem?.sku || editingItem?.itemCode;
-                                  const expiryDate = barcodeItem.expiryDate || selectedBatch.expiryDate;
-                                  const amount = barcodeItem.amount || barcodeItem.costPrice || selectedBatch.costPrice;
-                                  const batchNumber = barcodeItem.batchNumber || selectedBatch.batchNumber;
-                                  
-                                  return (
-                                    <div
-                                      key={barcodeIndex}
-                                      className="barcode-label-container border rounded p-2 print:border-0 print:p-0"
-                                    >
-                                      <BarcodeLabel
-                                        sku={sku}
-                                        barcode={barcodeItem.barcode || barcodeItem}
-                                        storeName={selectedStore?.name}
-                                        itemName={itemName}
-                                        expiryDate={expiryDate}
-                                        amount={amount}
-                                        batchNumber={batchNumber}
-                                      />
-                                    </div>
+                                {(() => {
+                                  // In item edit screen we want ONLY the product barcode (SKU) to be shown,
+                                  // not PO-generated barcodes that may include multiple products for the same invoice/batch.
+                                  const sku =
+                                    editingItem?.sku ||
+                                    editingItem?.itemCode ||
+                                    selectedBatch?.sku ||
+                                    "";
+                                  const itemName =
+                                    editingItem?.name ||
+                                    selectedBatch?.itemName ||
+                                    selectedBatch?.name ||
+                                    "";
+
+                                  const qtyFromBatch = Number(
+                                    selectedBatch?.batchQuantity ??
+                                      selectedBatch?.quantity ??
+                                      (Array.isArray(selectedBatch?.barcodes)
+                                        ? selectedBatch.barcodes.length
+                                        : 0) ??
+                                      0
                                   );
-                                })}
+                                  const labelCountRaw = Number.isFinite(qtyFromBatch) && qtyFromBatch > 0 ? Math.floor(qtyFromBatch) : 1;
+                                  const labelCount = Math.min(Math.max(labelCountRaw, 1), 200);
+
+                                  return (
+                                    <>
+                                      {Array.from({ length: labelCount }).map((_, idx) => (
+                                        <div
+                                          key={`${sku || "sku"}-${idx}`}
+                                          className="barcode-label-container border rounded p-2 print:border-0 print:p-0"
+                                        >
+                                          <BarcodeLabel
+                                            sku={sku}
+                                            barcode={sku}
+                                            storeName={selectedStore?.name}
+                                            itemName={itemName}
+                                            batchNumber={selectedBatch?.batchNumber}
+                                            expiryDate={selectedBatch?.expiryDate}
+                                            amount={selectedBatch?.costPrice}
+                                          />
+                                        </div>
+                                      ))}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             </div>
                           );
