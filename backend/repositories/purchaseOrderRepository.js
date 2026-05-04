@@ -394,6 +394,32 @@ const ensureTables = async () => {
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
 
+    // Ensure invoice number is unique per store (prevents duplicate invoice entries in PO entry screen)
+    try {
+      const idx = await query(
+        `
+        SELECT INDEX_NAME
+        FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA = DATABASE()
+          AND TABLE_NAME = 'purchase_orders'
+          AND INDEX_NAME = 'uq_po_store_invoice'
+        LIMIT 1
+        `
+      );
+      if (!idx || idx.length === 0) {
+        // MySQL allows multiple NULLs in UNIQUE indexes, but store_id + invoice_number will be set in our flow.
+        await query(
+          `CREATE UNIQUE INDEX uq_po_store_invoice ON purchase_orders (store_id, invoice_number)`
+        );
+        console.log('✅ Created unique index uq_po_store_invoice (store_id, invoice_number)');
+      }
+    } catch (error) {
+      // If the index already exists (race / old migrations), ignore.
+      if (error?.code !== 'ER_DUP_KEYNAME') {
+        console.warn('Could not create uq_po_store_invoice index:', error.message);
+      }
+    }
+
     await query(`
       CREATE TABLE IF NOT EXISTS purchase_order_items (
         id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -1127,6 +1153,19 @@ export const createPurchaseOrder = async ({
     const invoiceNum = normalizeInvoiceNumberForDb(invoiceNumber);
     const supplierNameForDb = (await resolveSupplierNameForDb(connection, supplier)) ?? null;
 
+    // Enforce unique invoice number per store
+    if (invoiceNum) {
+      const [dupRows] = await connection.query(
+        `SELECT id FROM purchase_orders WHERE store_id = ? AND invoice_number = ? LIMIT 1`,
+        [store ?? null, invoiceNum]
+      );
+      if (Array.isArray(dupRows) && dupRows.length > 0) {
+        const err = new Error(`Invoice number "${invoiceNum}" already exists for this store.`);
+        err.code = 'DUPLICATE_INVOICE_NUMBER';
+        throw err;
+      }
+    }
+
     let createdByUid = null;
     if (createdByUserId != null && String(createdByUserId).trim() !== "") {
       const n = Number.parseInt(String(createdByUserId), 10);
@@ -1266,6 +1305,24 @@ export const updatePurchaseOrder = async (
     const totalAmount = subtotal + taxAmount + shippingAmount - discountAmount;
     const invoiceNum = normalizeInvoiceNumberForDb(invoiceNumber);
     const supplierNameForDb = (await resolveSupplierNameForDb(connection, supplier)) ?? null;
+
+    // Enforce unique invoice number per store (exclude current PO)
+    if (invoiceNum) {
+      const [dupRows] = await connection.query(
+        `SELECT id
+         FROM purchase_orders
+         WHERE store_id = ?
+           AND invoice_number = ?
+           AND id <> ?
+         LIMIT 1`,
+        [store ?? null, invoiceNum, purchaseOrderId]
+      );
+      if (Array.isArray(dupRows) && dupRows.length > 0) {
+        const err = new Error(`Invoice number "${invoiceNum}" already exists for this store.`);
+        err.code = 'DUPLICATE_INVOICE_NUMBER';
+        throw err;
+      }
+    }
 
     await connection.execute(
       `UPDATE purchase_orders

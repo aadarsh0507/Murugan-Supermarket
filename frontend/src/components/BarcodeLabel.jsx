@@ -71,8 +71,8 @@ const BarcodeLabel = ({ barcode, sku, storeName, itemName, expiryDate, amount, b
 
         JsBarcode(canvasRef.current, value, {
           format,
-          width: 2,
-          height: 60,
+          width: 4,
+          height: 120,
           displayValue: false,
           fontSize: 12,
           margin: 5,
@@ -107,14 +107,14 @@ const BarcodeLabel = ({ barcode, sku, storeName, itemName, expiryDate, amount, b
   const barcodeNumber = (sku && String(sku).trim()) || (barcode && String(barcode).trim()) || "";
 
   return (
-    <div className="barcode-label-wrapper border-2 border-gray-800 p-2 bg-white" style={{ width: "300px", minHeight: "150px" }}>
+    <div className="barcode-label-wrapper border-2 border-gray-800 p-2 bg-white" style={{ width: "300px", minHeight: "220px" }}>
       {/* Store Name - Uppercase */}
       <div className="text-center font-bold text-sm mb-1 pb-1" style={{ textTransform: "uppercase", fontSize: "11px" }}>
         {displayStoreName.toUpperCase()}
       </div>
       
       {/* Barcode */}
-      <div className="flex flex-col items-center mb-1 min-h-[60px]">
+      <div className="flex flex-col items-center mb-1 min-h-[120px]">
         {barcodeError ? (
           <div className="text-center text-xs text-red-600 border border-red-300 p-2 rounded">
             Invalid barcode format

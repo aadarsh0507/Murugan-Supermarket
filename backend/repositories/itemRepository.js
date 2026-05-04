@@ -1,8 +1,79 @@
-import { query } from '../db/index.js';
+import { query, transaction } from '../db/index.js';
 
 const toNumber = (value, defaultValue = 0) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : defaultValue;
+};
+
+const runQuery = async (conn, sql, params = undefined) => {
+  // In non-transaction code we use our `query()` helper which returns `rows`.
+  // Inside transactions we get a mysql2 connection whose `query()` returns `[rows, fields]`.
+  if (conn && typeof conn.query === 'function') {
+    const result = await conn.query(sql, params);
+    // mysql2/promise returns [rows, fields]
+    if (Array.isArray(result) && result.length >= 1) {
+      return result[0];
+    }
+    return result;
+  }
+  return query(sql, params);
+};
+
+const ensureCodeSequencesTable = async (conn) => {
+  await runQuery(conn, `
+    CREATE TABLE IF NOT EXISTS code_sequences (
+      name VARCHAR(64) NOT NULL PRIMARY KEY,
+      current_value BIGINT UNSIGNED NOT NULL DEFAULT 0,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+  `);
+};
+
+const getMaxNumericProductCode = async (conn) => {
+  const rows = await runQuery(
+    conn,
+    `SELECT MAX(CAST(ProductCode AS UNSIGNED)) AS maxCode
+     FROM Products
+     WHERE ProductCode REGEXP '^[0-9]+$'`
+  );
+  const row = rows?.[0];
+  return Number(row?.maxCode ?? 0) || 0;
+};
+
+const getNextNumericProductCode = async () => {
+  // Always generate numeric ProductCode continuing the series (e.g., 8740 -> 8741),
+  // even if Products.ProductCode is VARCHAR. Uses a row-locked sequence to avoid duplicates.
+  return transaction(async (conn) => {
+    await ensureCodeSequencesTable(conn);
+
+    const seqName = 'products.product_code';
+    const rows = await runQuery(
+      conn,
+      'SELECT current_value FROM code_sequences WHERE name = ? LIMIT 1 FOR UPDATE',
+      [seqName]
+    );
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      const maxCode = await getMaxNumericProductCode(conn);
+      await runQuery(
+        conn,
+        'INSERT INTO code_sequences (name, current_value) VALUES (?, ?)',
+        [seqName, maxCode]
+      );
+    }
+
+    await runQuery(
+      conn,
+      'UPDATE code_sequences SET current_value = LAST_INSERT_ID(current_value + 1) WHERE name = ?',
+      [seqName]
+    );
+    const idRows = await runQuery(conn, 'SELECT LAST_INSERT_ID() AS nextCode');
+    const nextCode = Number(idRows?.[0]?.nextCode ?? 0);
+    if (!Number.isFinite(nextCode) || nextCode <= 0) {
+      throw new Error('Failed to generate next product code');
+    }
+    return String(nextCode);
+  });
 };
 
 /**
@@ -1076,8 +1147,8 @@ const generateProductCode = async () => {
     `);
     
     if (columnInfo.length === 0) {
-      // Fallback: assume varchar and generate from timestamp
-      return `PROD_${Date.now()}`;
+      // Fallback: still generate numeric continuation
+      return await getNextNumericProductCode();
     }
     
     const dataType = columnInfo[0].DATA_TYPE?.toUpperCase();
@@ -1089,24 +1160,47 @@ const generateProductCode = async () => {
       const maxCode = maxResult[0]?.maxCode || 0;
       return String(Number(maxCode) + 1);
     } else {
-      // VARCHAR ProductCode - generate from timestamp with counter
-      let counter = 1;
-      while (counter < 1000) {
-        const code = `PROD_${Date.now()}_${counter}`;
-        const existing = await query('SELECT ProductCode FROM Products WHERE ProductCode = ? LIMIT 1', [code]);
-        if (existing.length === 0) {
-          return code;
-        }
-        counter++;
-      }
-      // Fallback if we can't find unique code
-      return `PROD_${Date.now()}`;
+      // VARCHAR ProductCode - still generate numeric continuation for SKU series
+      return await getNextNumericProductCode();
     }
   } catch (error) {
     console.error('Error generating ProductCode:', error);
-    // Fallback to timestamp-based code
-    return `PROD_${Date.now()}`;
+    // Fallback to numeric continuation
+    return await getNextNumericProductCode();
   }
+};
+
+const generateNextNumericItemCode = async (conn) => {
+  // Generate the next numeric code by looking at both Products.ProductCode and items.item_code
+  // (only numeric-looking values), then adding 1. Must be called inside a transaction for safety.
+  const productsRows = await runQuery(
+    conn,
+    `SELECT MAX(CAST(ProductCode AS UNSIGNED)) AS maxCode
+     FROM Products
+     WHERE ProductCode REGEXP '^[0-9]+$'`
+  );
+  const productsMax = productsRows?.[0];
+
+  // items table might not exist or might not have any numeric codes yet
+  let itemsMaxValue = 0;
+  try {
+    const itemsRows = await runQuery(
+      conn,
+      `SELECT MAX(CAST(item_code AS UNSIGNED)) AS maxCode
+       FROM items
+       WHERE item_code REGEXP '^[0-9]+$'`
+    );
+    const itemsMax = itemsRows?.[0];
+    itemsMaxValue = itemsMax?.maxCode || 0;
+  } catch (error) {
+    if (error?.code !== 'ER_NO_SUCH_TABLE') {
+      throw error;
+    }
+  }
+
+  const pMax = productsMax?.maxCode || 0;
+  const next = Math.max(Number(pMax) || 0, Number(itemsMaxValue) || 0) + 1;
+  return String(next);
 };
 
 export const createItem = async (itemData) => {
@@ -1332,47 +1426,56 @@ export const createItem = async (itemData) => {
 
   const hasStoreIdColumn = storeIdColumnCheck.length > 0;
 
-  if (hasStoreIdColumn) {
-    const result = await query(
-      `INSERT INTO items (
-        item_code, name, description, brand, category_id, subcategory_id,
-        unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
-        gst_rate, hsn_code, barcode, notes, bogo_offer, is_active, store_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        itemCode,
-        name,
-        description || null,
-        brand || null,
-        categoryId || null,
-        subcategoryId || null,
-        unit || null,
-        costPrice || 0,
-        sellingPrice || 0,
-        mrp || 0,
-        reorderLevel || 0,
-        normalizedMinStock || 0,
-        normalizedMaxStock || 0,
-        gstRate || 0,
-        hsnCode || null,
-        barcode || null,
-        notes || null,
-        normalizedBogo,
-        isActive ? 1 : 0,
-        storeId || null
-      ]
-    );
-    return getItemById(result.insertId, storeId);
-  } else {
-    // Fallback: insert without store_id if column doesn't exist
-    const result = await query(
+  // If caller didn't provide an itemCode, auto-generate a numeric one continuing Products series.
+  // Do it inside a transaction so concurrent creates can't pick the same value.
+  const resolvedItemCode = itemCode && String(itemCode).trim()
+    ? String(itemCode).trim()
+    : null;
+
+  const insertItemRow = async (conn, codeToUse) => {
+    if (hasStoreIdColumn) {
+      const result = await runQuery(
+        conn,
+        `INSERT INTO items (
+          item_code, name, description, brand, category_id, subcategory_id,
+          unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
+          gst_rate, hsn_code, barcode, notes, bogo_offer, is_active, store_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          codeToUse,
+          name,
+          description || null,
+          brand || null,
+          categoryId || null,
+          subcategoryId || null,
+          unit || null,
+          costPrice || 0,
+          sellingPrice || 0,
+          mrp || 0,
+          reorderLevel || 0,
+          normalizedMinStock || 0,
+          normalizedMaxStock || 0,
+          gstRate || 0,
+          hsnCode || null,
+          barcode || codeToUse || null,
+          notes || null,
+          normalizedBogo,
+          isActive ? 1 : 0,
+          storeId || null
+        ]
+      );
+      return result?.insertId;
+    }
+
+    const result = await runQuery(
+      conn,
       `INSERT INTO items (
         item_code, name, description, brand, category_id, subcategory_id,
         unit, cost_price, selling_price, mrp, reorder_level, min_stock, max_stock,
         gst_rate, hsn_code, barcode, notes, bogo_offer, is_active
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        itemCode,
+        codeToUse,
         name,
         description || null,
         brand || null,
@@ -1387,13 +1490,44 @@ export const createItem = async (itemData) => {
         normalizedMaxStock || 0,
         gstRate || 0,
         hsnCode || null,
-        barcode || null,
+        barcode || codeToUse || null,
         notes || null,
         normalizedBogo,
         isActive ? 1 : 0
       ]
     );
-    return getItemById(result.insertId, storeId);
+    return result?.insertId;
+  };
+
+  if (hasStoreIdColumn) {
+    const insertId = await transaction(async (conn) => {
+      const codeToUse = resolvedItemCode ?? (await generateNextNumericItemCode(conn));
+      try {
+        return await insertItemRow(conn, codeToUse);
+      } catch (error) {
+        // If a race caused a duplicate item_code, retry once with a new code.
+        if (error?.code === 'ER_DUP_ENTRY' && !resolvedItemCode) {
+          const retryCode = await generateNextNumericItemCode(conn);
+          return await insertItemRow(conn, retryCode);
+        }
+        throw error;
+      }
+    });
+    return getItemById(insertId, storeId);
+  } else {
+    const insertId = await transaction(async (conn) => {
+      const codeToUse = resolvedItemCode ?? (await generateNextNumericItemCode(conn));
+      try {
+        return await insertItemRow(conn, codeToUse);
+      } catch (error) {
+        if (error?.code === 'ER_DUP_ENTRY' && !resolvedItemCode) {
+          const retryCode = await generateNextNumericItemCode(conn);
+          return await insertItemRow(conn, retryCode);
+        }
+        throw error;
+      }
+    });
+    return getItemById(insertId, storeId);
   }
 };
 
