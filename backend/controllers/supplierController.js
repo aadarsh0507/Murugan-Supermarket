@@ -441,16 +441,30 @@ export const listSuppliers = async (req, res) => {
                 }
 
                 if (hasStoreFilter) {
-                    conditions.push(`(
-                        store_id = ?
-                        OR EXISTS (
-                            SELECT 1
-                            FROM supplier_stores ss
-                            WHERE ss.supplier_id = \`SUPPLIERCODE\`
-                              AND ss.store_id = ?
-                        )
-                    )`);
-                    params.push(normalizedStoreId, normalizedStoreId);
+                    // supplier_stores is optional in some deployments; fall back to Suppliers.store_id only
+                    let hasSupplierStoresTable = false;
+                    try {
+                        await query('SELECT 1 FROM supplier_stores LIMIT 1');
+                        hasSupplierStoresTable = true;
+                    } catch (err) {
+                        hasSupplierStoresTable = false;
+                    }
+
+                    if (hasSupplierStoresTable) {
+                        conditions.push(`(
+                            store_id = ?
+                            OR EXISTS (
+                                SELECT 1
+                                FROM supplier_stores ss
+                                WHERE ss.supplier_id = \`SUPPLIERCODE\`
+                                  AND ss.store_id = ?
+                            )
+                        )`);
+                        params.push(normalizedStoreId, normalizedStoreId);
+                    } else {
+                        conditions.push('store_id = ?');
+                        params.push(normalizedStoreId);
+                    }
                 }
 
                 if (conditions.length > 0) {

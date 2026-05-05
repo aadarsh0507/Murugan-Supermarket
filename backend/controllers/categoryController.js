@@ -1,60 +1,24 @@
 import { query } from '../db/index.js';
 
-// Category code to name mapping
-const CATEGORY_NAME_MAP = {
-  '1': 'Beverages',
-  '2': 'Snacks',
-  '3': 'Dairy',
-  '4': 'Fruits & Vegetables',
-  '5': 'Bakery',
-  '6': 'Meat & Seafood',
-  '7': 'Frozen Foods',
-  '8': 'Personal Care',
-  '9': 'Household',
-  '10': 'Electronics',
-  '11': 'Clothing',
-  '12': 'Home & Garden',
-  '13': 'Sports & Outdoors',
-  '14': 'Toys & Games',
-  '15': 'Books',
-  '16': 'Health & Beauty',
-  '17': 'Automotive',
-  '18': 'Office Supplies',
-  '19': 'Pet Supplies',
-  '20': 'Baby Products',
-  '21': 'Jewelry',
-  '22': 'Shoes',
-  '23': 'Watches',
-  '24': 'Luggage',
-  '25': 'Musical Instruments',
-  '26': 'Art & Crafts',
-  '27': 'Party Supplies',
-  '28': 'Seasonal',
-  '29': 'Tea & Coffee',
-  '30': 'Spices & Condiments',
-  '31': 'Rice & Grains',
-  '32': 'Pulses & Legumes',
-  '33': 'Oil & Ghee',
-  '34': 'Sugar & Sweeteners',
-  '35': 'Flour & Baking',
-  '38': 'Cleaning Supplies',
-  '39': 'Stationery',
-  '40': 'Gift Items',
-  '41': 'Confectionery',
-  '42': 'Biscuits & Cookies',
-  '43': 'Noodles & Pasta',
-  '44': 'Sauces & Pickles',
-  '45': 'Ready to Eat',
-  '46': 'Breakfast Cereals',
-  '47': 'Health Supplements',
-  '48': 'Ayurvedic Products',
-  '49': 'Organic Products',
+const requireCategoryTable = async (res) => {
+  const rows = await query(`
+    SELECT TABLE_NAME
+    FROM information_schema.TABLES
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'Category'
+    LIMIT 1
+  `);
+  if (rows.length === 0) {
+    res.status(503).json({ status: 'error', message: 'Category table does not exist' });
+    return false;
+  }
+  return true;
 };
 
-const getCategoryName = (code) => {
-  if (!code) return null;
-  const trimmedCode = String(code).trim();
-  return CATEGORY_NAME_MAP[trimmedCode] || `Category ${trimmedCode}`;
+const requireCategoryRow = (categoryCode, categoryRow, res) => {
+  if (categoryRow) return true;
+  res.status(404).json({ status: 'error', message: 'Category not found' });
+  return false;
 };
 
 const parseLimit = (value, defaultValue = 100, max = 500) => {
@@ -75,131 +39,70 @@ const parseOffset = (value, defaultValue = 0) => {
 
 export const getAllCategories = async (req, res) => {
   try {
+    if (!(await requireCategoryTable(res))) return;
     const limit = parseLimit(req.query.limit, 100);
     const offset = parseOffset(req.query.offset ?? req.query.cursor, 0);
     const search = req.query.q?.trim() || req.query.search?.trim() || undefined;
     const storeId = req.query.store_id ? Number(req.query.store_id) : undefined;
 
-    // Check if Category table exists and has data
-    const categoryTableCheck = await query(`
-      SELECT TABLE_NAME 
-      FROM information_schema.TABLES 
-      WHERE TABLE_SCHEMA = DATABASE() 
-      AND TABLE_NAME = 'Category'
-    `);
-
-    if (categoryTableCheck.length > 0) {
-      // Use Category table
-      const filters = [];
-      const params = [];
-
-      if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
-        filters.push('store_id = ?');
-        params.push(storeId);
-      }
-
-      if (search) {
-        filters.push('(CategoryCode LIKE ? OR Description LIKE ?)');
-        const likeValue = `%${search}%`;
-        params.push(likeValue, likeValue);
-      }
-
-      const includeInactive = ['1', 'true', 'yes'].includes(
-        String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
-      );
-      if (!includeInactive) {
-        filters.push('IsActive = 1');
-      }
-
-      const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
-
-      const rows = await query(
-        `SELECT CategoryCode, Description, store_id, IsActive
-         FROM Category
-         ${whereClause}
-         ORDER BY CategoryCode ASC
-         LIMIT ? OFFSET ?`,
-        [...params, limit, offset]
-      );
-
-      const countRows = await query(
-        `SELECT COUNT(*) AS total
-         FROM Category
-         ${whereClause}`,
-        params
-      );
-
-      const total = countRows[0]?.total || 0;
-      const categories = rows.map((row) => ({
-        id: row.CategoryCode,
-        code: row.CategoryCode,
-        name: row.Description || getCategoryName(row.CategoryCode),
-        storeId: row.store_id,
-        isActive: Boolean(row.IsActive)
-      }));
-
-      const hasNext = offset + categories.length < total;
-
-      return res.json({
-        status: 'success',
-        data: {
-          categories,
-          pagination: {
-            total,
-            limit,
-            offset,
-            hasNext,
-            nextCursor: hasNext ? offset + categories.length : null
-          }
-        }
-      });
-    }
-
-    // Fallback to Products table (legacy)
-    const filters = ['CategoryCode IS NOT NULL', "TRIM(CategoryCode) <> ''"];
+    const filters = [];
     const params = [];
 
+    if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
+      filters.push('store_id = ?');
+      params.push(storeId);
+    }
+
     if (search) {
-      filters.push('(CategoryCode LIKE ? OR SubCategory LIKE ?)');
+      filters.push('(CategoryCode LIKE ? OR Description LIKE ?)');
       const likeValue = `%${search}%`;
       params.push(likeValue, likeValue);
+    }
+
+    const includeInactive = ['1', 'true', 'yes'].includes(
+      String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
+    );
+    if (!includeInactive) {
+      filters.push('IsActive = 1');
     }
 
     const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
 
     const rows = await query(
-      `SELECT DISTINCT TRIM(CategoryCode) AS categoryCode
-       FROM Products
+      `SELECT CategoryCode, Description, store_id, IsActive
+       FROM Category
        ${whereClause}
-       ORDER BY categoryCode ASC
+       ORDER BY CategoryCode ASC
        LIMIT ? OFFSET ?`,
       [...params, limit, offset]
     );
 
     const countRows = await query(
-      `SELECT COUNT(DISTINCT TRIM(CategoryCode)) AS total
-       FROM Products
+      `SELECT COUNT(*) AS total
+       FROM Category
        ${whereClause}`,
       params
     );
 
     const total = countRows[0]?.total || 0;
     const categories = rows
-      .map((row) => row.categoryCode?.trim())
-      .filter((code) => code && code.length > 0)
-      .map((code) => {
-        const categoryName = getCategoryName(code);
+      .map((row) => {
+        const code = row.CategoryCode != null ? String(row.CategoryCode).trim() : null;
+        const name = row.Description != null ? String(row.Description).trim() : null;
+        if (!code || !name) return null;
         return {
           id: code,
           code,
-          name: categoryName,
-          isActive: true
+          name,
+          storeId: row.store_id,
+          isActive: Boolean(row.IsActive)
         };
-      });
+      })
+      .filter(Boolean);
 
     const hasNext = offset + categories.length < total;
 
-    res.json({
+    return res.json({
       status: 'success',
       data: {
         categories,
@@ -223,6 +126,7 @@ export const getAllCategories = async (req, res) => {
 
 export const getCategoryById = async (req, res) => {
   try {
+    if (!(await requireCategoryTable(res))) return;
     const categoryCode = req.params.id?.trim();
     if (!categoryCode) {
       return res.status(400).json({
@@ -233,36 +137,24 @@ export const getCategoryById = async (req, res) => {
 
     const storeId = req.query.store_id ? Number(req.query.store_id) : undefined;
 
-    // Check if Category table exists
-    const categoryTableCheck = await query(`
-      SELECT TABLE_NAME 
-      FROM information_schema.TABLES 
-      WHERE TABLE_SCHEMA = DATABASE() 
-      AND TABLE_NAME = 'Category'
-    `);
+    // Get category from Category table (DB-only)
+    const categoryFilters = ['CategoryCode = ?'];
+    const categoryParams = [categoryCode];
 
-    let category = null;
-    if (categoryTableCheck.length > 0) {
-      // Get category from Category table
-      const categoryFilters = ['CategoryCode = ?'];
-      const categoryParams = [categoryCode];
-
-      if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
-        categoryFilters.push('store_id = ?');
-        categoryParams.push(storeId);
-      }
-
-      const categoryRows = await query(
-        `SELECT CategoryCode, Description, store_id, IsActive
-         FROM Category
-         WHERE ${categoryFilters.join(' AND ')}`,
-        categoryParams
-      );
-
-      if (categoryRows.length > 0) {
-        category = categoryRows[0];
-      }
+    if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
+      categoryFilters.push('store_id = ?');
+      categoryParams.push(storeId);
     }
+
+    const categoryRows = await query(
+      `SELECT CategoryCode, Description, store_id, IsActive
+       FROM Category
+       WHERE ${categoryFilters.join(' AND ')}`,
+      categoryParams
+    );
+
+    const category = categoryRows.length > 0 ? categoryRows[0] : null;
+    if (!requireCategoryRow(categoryCode, category, res)) return;
 
     // Get subcategories from Subcategory table using ParentId (match INT/VARCHAR like hierarchy)
     const subcategoryFilters = ['IsActive = 1', "Description IS NOT NULL", "TRIM(Description) <> ''"];
@@ -309,28 +201,14 @@ export const getCategoryById = async (req, res) => {
       })
       .filter(Boolean);
 
-    if (category) {
-      return res.json({
-        status: 'success',
-        data: {
-          id: category.CategoryCode,
-          code: category.CategoryCode,
-          name: category.Description || getCategoryName(category.CategoryCode),
-          storeId: category.store_id,
-          isActive: Boolean(category.IsActive),
-          subcategories
-        }
-      });
-    }
-
-    // Fallback to legacy approach
-    res.json({
+    return res.json({
       status: 'success',
       data: {
-        id: categoryCode,
-        code: categoryCode,
-        name: getCategoryName(categoryCode),
-        isActive: true,
+        id: String(category.CategoryCode),
+        code: String(category.CategoryCode),
+        name: String(category.Description ?? '').trim(),
+        storeId: category.store_id,
+        isActive: Boolean(category.IsActive),
         subcategories
       }
     });
@@ -345,53 +223,33 @@ export const getCategoryById = async (req, res) => {
 
 export const getCategoryHierarchy = async (req, res) => {
   try {
+    if (!(await requireCategoryTable(res))) return;
     const storeId = req.query.store_id ? Number(req.query.store_id) : undefined;
     const includeInactive = ['1', 'true', 'yes'].includes(
       String(req.query.include_inactive ?? req.query.includeInactive ?? '').toLowerCase()
     );
+    // Use Category table
+    const categoryFilters = [];
+    if (!includeInactive) {
+      categoryFilters.push('IsActive = 1');
+    }
+    const categoryParams = [];
 
-    // Check if Category table exists
-    const categoryTableCheck = await query(`
-      SELECT TABLE_NAME 
-      FROM information_schema.TABLES 
-      WHERE TABLE_SCHEMA = DATABASE() 
-      AND TABLE_NAME = 'Category'
-    `);
+    if (storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
+      categoryFilters.push('store_id = ?');
+      categoryParams.push(storeId);
+    }
 
-    if (categoryTableCheck.length > 0) {
-      // Check if store_id column exists
-      const storeIdColumnCheck = await query(`
-        SELECT COLUMN_NAME 
-        FROM information_schema.COLUMNS 
-        WHERE TABLE_SCHEMA = DATABASE() 
-        AND TABLE_NAME = 'Category'
-        AND COLUMN_NAME = 'store_id'
-      `);
+    const categoryWhere =
+      categoryFilters.length > 0 ? `WHERE ${categoryFilters.join(' AND ')}` : '';
 
-      const hasStoreIdColumn = storeIdColumnCheck.length > 0;
-
-      // Use Category table
-      const categoryFilters = [];
-      if (!includeInactive) {
-        categoryFilters.push('IsActive = 1');
-      }
-      const categoryParams = [];
-
-      if (hasStoreIdColumn && storeId !== undefined && Number.isInteger(storeId) && storeId > 0) {
-        categoryFilters.push('store_id = ?');
-        categoryParams.push(storeId);
-      }
-
-      const categoryWhere =
-        categoryFilters.length > 0 ? `WHERE ${categoryFilters.join(' AND ')}` : '';
-
-      const categoryRows = await query(
-        `SELECT CategoryCode, Description, IsActive${hasStoreIdColumn ? ', store_id' : ''}
-         FROM Category
-         ${categoryWhere}
-         ORDER BY CategoryCode ASC`,
-        categoryParams
-      );
+    const categoryRows = await query(
+      `SELECT CategoryCode, Description, IsActive, store_id
+       FROM Category
+       ${categoryWhere}
+       ORDER BY CategoryCode ASC`,
+      categoryParams
+    );
 
       const categories = await Promise.all(
         categoryRows.map(async (row) => {
@@ -498,10 +356,12 @@ export const getCategoryHierarchy = async (req, res) => {
             })
             .filter(Boolean);
 
+          const name = row.Description ? String(row.Description).trim() : null;
+          if (!name) return null;
           return {
             id: categoryCode,
             code: categoryCode,
-            name: row.Description || getCategoryName(categoryCode),
+            name,
             storeId: row.store_id || null,
             isActive: Boolean(row.IsActive),
             subcategories
@@ -515,62 +375,6 @@ export const getCategoryHierarchy = async (req, res) => {
           categories: categories.filter(Boolean)
         }
       });
-    }
-
-    // Fallback to Products table (legacy)
-    const categoryRows = await query(
-      `SELECT DISTINCT TRIM(CategoryCode) AS categoryCode
-       FROM Products
-       WHERE CategoryCode IS NOT NULL AND TRIM(CategoryCode) <> ''
-       ORDER BY categoryCode ASC`
-    );
-
-    const categories = await Promise.all(
-      categoryRows.map(async (row) => {
-        const categoryCode = row.categoryCode?.trim();
-        if (!categoryCode) return null;
-
-        // Get subcategories for this category from Subcategory table
-        // Using ParentId to match the category and Description as the name
-        const subActiveClause = includeInactive ? '' : ' AND IsActive = 1';
-        const subcategoryRows = await query(
-          `SELECT SubCategoryCode, Description, ParentId, IsActive
-           FROM Subcategory
-           WHERE ParentId = ?${subActiveClause} AND Description IS NOT NULL AND TRIM(Description) <> ''
-           ORDER BY Description ASC`,
-          [categoryCode]
-        );
-
-        const subcategories = subcategoryRows
-          .map((subRow) => {
-            const code = subRow.SubCategoryCode ? String(subRow.SubCategoryCode).trim() : null;
-            const name = subRow.Description ? String(subRow.Description).trim() : null;
-            if (!code || !name) return null;
-            return {
-              id: `${categoryCode}:${code}`,
-              code: code,
-              name: name,
-              isActive: Boolean(subRow.IsActive)
-            };
-          })
-          .filter(Boolean);
-
-        return {
-          id: categoryCode,
-          code: categoryCode,
-          name: getCategoryName(categoryCode),
-          isActive: true,
-          subcategories
-        };
-      })
-    );
-
-    res.json({
-      status: 'success',
-      data: {
-        categories: categories.filter(Boolean)
-      }
-    });
   } catch (error) {
     console.error('Error fetching category hierarchy:', error);
     console.error('Error details:', {

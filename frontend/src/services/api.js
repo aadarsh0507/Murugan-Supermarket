@@ -78,7 +78,8 @@ const apiRequest = async (endpoint, options = {}) => {
 
   try {
     const response = await fetch(url, config);
-    const data = await response.json();
+    const rawText = await response.text();
+    const data = rawText ? JSON.parse(rawText) : {};
 
     if (!response.ok) {
       const error = new Error(data.message || 'API request failed');

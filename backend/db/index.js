@@ -161,6 +161,158 @@ const ensureTaxTableExists = async () => {
   }
 };
 
+const ensureBrandTableExists = async () => {
+  if (!databaseName) {
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      ...baseConnectionConfig,
+      database: databaseName
+    });
+
+    const [tableRows] = await connection.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Brand' LIMIT 1`,
+      [databaseName]
+    );
+
+    if (tableRows.length > 0) {
+      return;
+    }
+
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS \`Brand\` (
+        \`BrandCode\` varchar(50) NOT NULL,
+        \`Description\` varchar(200) DEFAULT NULL,
+        \`IsActive\` tinyint(1) DEFAULT '1',
+        \`store_id\` int unsigned DEFAULT NULL,
+        \`created_at\` datetime DEFAULT CURRENT_TIMESTAMP,
+        \`updated_at\` datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (\`BrandCode\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;`
+    );
+    console.info('✅ Created missing table Brand');
+  } catch (error) {
+    console.error('Failed to ensure Brand table:', error.message);
+    throw error;
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+};
+
+const ensureCategoryTableExists = async () => {
+  if (!databaseName) {
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      ...baseConnectionConfig,
+      database: databaseName
+    });
+
+    const [tableRows] = await connection.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Category' LIMIT 1`,
+      [databaseName]
+    );
+
+    if (tableRows.length === 0) {
+      await connection.query(
+        `CREATE TABLE IF NOT EXISTS \`Category\` (
+          \`CategoryCode\` int NOT NULL,
+          \`Description\` text,
+          \`CreationDate\` text,
+          \`CreatedbyUser\` text,
+          \`ModifiedbyUser\` text,
+          \`ModifiedDate\` text,
+          \`IsActive\` int DEFAULT NULL,
+          \`store_id\` int unsigned DEFAULT NULL,
+          \`IsImported\` text,
+          \`FileName\` text,
+          \`ImportedDate\` text,
+          \`OldCode\` text,
+          \`MasterId\` int DEFAULT NULL,
+          \`CommissionPercentage\` int DEFAULT NULL,
+          \`Classification\` int DEFAULT NULL,
+          \`AllowBilling\` int DEFAULT NULL,
+          \`MaintainSingleQty\` int DEFAULT NULL,
+          \`DefaultPurchaseTax\` text,
+          \`DefaultSalesTax\` text,
+          \`AllowAdjustment\` int DEFAULT NULL,
+          \`SyncId\` text,
+          \`ProductHandlingMethod\` text,
+          \`ReferenceProductCode\` text,
+          \`SeriesName\` text,
+          PRIMARY KEY (\`CategoryCode\`),
+          KEY \`idx_store_id\` (\`store_id\`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;`
+      );
+      console.info('✅ Created missing table Category');
+    }
+
+    // Seed Category codes if table is empty (so UI isn't blank after removing hardcoded map)
+    const [countRows] = await connection.query(`SELECT COUNT(*) AS total FROM \`Category\``);
+    const total = Number(countRows?.[0]?.total || 0);
+    if (total > 0) {
+      return;
+    }
+
+    const seedCodes = new Set();
+
+    // Prefer Subcategory.ParentId as source of category codes
+    try {
+      const [subcats] = await connection.query(
+        `SELECT DISTINCT ParentId AS code FROM \`Subcategory\` WHERE ParentId IS NOT NULL`
+      );
+      for (const row of subcats) {
+        const n = Number(row.code);
+        if (Number.isInteger(n) && n > 0) seedCodes.add(n);
+      }
+    } catch {
+      // ignore if Subcategory missing
+    }
+
+    // Also try Products.CategoryCode if available
+    try {
+      const [products] = await connection.query(
+        `SELECT DISTINCT CategoryCode AS code FROM \`Products\` WHERE CategoryCode IS NOT NULL`
+      );
+      for (const row of products) {
+        const n = Number(row.code);
+        if (Number.isInteger(n) && n > 0) seedCodes.add(n);
+      }
+    } catch {
+      // ignore if Products missing
+    }
+
+    const codes = Array.from(seedCodes).sort((a, b) => a - b);
+    if (codes.length === 0) {
+      return;
+    }
+
+    // Insert with generic names; user can edit names later in DB/UI.
+    const valuesSql = codes.map(() => '(?, ?, 1)').join(', ');
+    const params = codes.flatMap((code) => [code, `Category ${code}`]);
+    await connection.query(
+      `INSERT INTO \`Category\` (\`CategoryCode\`, \`Description\`, \`IsActive\`) VALUES ${valuesSql}`,
+      params
+    );
+    console.info(`✅ Seeded Category table with ${codes.length} rows`);
+  } catch (error) {
+    console.error('Failed to ensure Category table:', error.message);
+    throw error;
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+};
+
 const ensureDatabaseExists = async () => {
   if (!databaseName) {
     return;
@@ -353,6 +505,8 @@ try {
   await ensureUsersTableSchema();
   await ensureSubcategoryTableExists();
   await ensureTaxTableExists();
+  await ensureBrandTableExists();
+  await ensureCategoryTableExists();
   await ensureBrandSubcategoryColumn();
 } catch (error) {
   console.error('Failed to prepare database:', error.message);

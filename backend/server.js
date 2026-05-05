@@ -45,7 +45,12 @@ import { ensureUserStoresTable } from './scripts/ensureUserStoresTable.js';
 const app = express();
 
 // Security middleware
-app.use(helmet());
+app.use(
+  helmet({
+    // Allow the frontend (different origin in dev) to load images from this backend.
+    crossOriginResourcePolicy: { policy: 'cross-origin' }
+  })
+);
 
 // Compression middleware (gzip/brotli)
 app.use(compression({

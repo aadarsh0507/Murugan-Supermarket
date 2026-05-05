@@ -373,20 +373,28 @@ export const getUserById = async (userId) => {
 };
 
 export const getStoresForUser = async (userId) => {
-    const rows = await query(
-        `SELECT s.id AS _id, s.id, s.name, s.store_code AS code, s.address_city AS city
-     FROM stores s
-     INNER JOIN user_stores us ON us.store_id = s.id
-     WHERE us.user_id = ?`,
-        [userId]
-    );
-    return rows.map((row) => ({
-        _id: row.id,
-        id: row.id,
-        name: row.name,
-        code: row.code,
-        city: row.city
-    }));
+    try {
+        const rows = await query(
+            `SELECT s.id AS _id, s.id, s.name, s.store_code AS code, s.address_city AS city
+       FROM stores s
+       INNER JOIN user_stores us ON us.store_id = s.id
+       WHERE us.user_id = ?`,
+            [userId]
+        );
+        return rows.map((row) => ({
+            _id: row.id,
+            id: row.id,
+            name: row.name,
+            code: row.code,
+            city: row.city
+        }));
+    } catch (error) {
+        // Some installs may not have user_stores yet; treat as "no assigned stores" instead of failing auth/profile.
+        if (error?.code === 'ER_NO_SUCH_TABLE') {
+            return [];
+        }
+        throw error;
+    }
 };
 
 // Use the proper getStoreById from storeRepository to ensure all fields (including gstNumber) are included
