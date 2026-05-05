@@ -40,6 +40,7 @@ import { runStoreCodeMigration } from './repositories/storeRepository.js';
 import { Screen, User, Store } from './models/index.js';
 import { initializeScreens } from './services/screenService.js';
 import { ensurePurchaseOrdersTables } from './scripts/ensurePurchaseOrdersTables.js';
+import { ensureUserStoresTable } from './scripts/ensureUserStoresTable.js';
 
 const app = express();
 
@@ -165,6 +166,13 @@ try {
   console.log('✅ Purchase Orders tables ensured');
 } catch (error) {
   console.warn('⚠️ Could not ensure Purchase Orders tables:', error?.message ?? error);
+}
+
+try {
+  await ensureUserStoresTable();
+  console.log('✅ user_stores table ensured');
+} catch (error) {
+  console.warn('⚠️ Could not ensure user_stores table:', error?.message ?? error);
 }
 
 ensureDirectoryExists(uploadsRootDir);

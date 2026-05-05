@@ -102,7 +102,13 @@ export async function runDailyBackup() {
     }
 
     // Fallback: save to host BACKUP_DIR via docker cp
-    const backupDir = process.env.BACKUP_DIR || path.join(process.cwd(), 'backups');
+    const defaultBackupDir = (() => {
+      const cwd = process.cwd();
+      // Common dev pattern: run backend from the `backend/` folder but keep backups at repo root `backups/`.
+      if (path.basename(cwd).toLowerCase() === 'backend') return path.resolve(cwd, '..', 'backups');
+      return path.resolve(cwd, 'backups');
+    })();
+    const backupDir = process.env.BACKUP_DIR || defaultBackupDir;
     const hostBackupPath = path.join(backupDir, filename);
     const containerTmp = `/tmp/daily-backup-${dateStr}.sql`;
 

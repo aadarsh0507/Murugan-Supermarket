@@ -365,7 +365,14 @@ const ensureOverridesTable = async () => {
       AND COLUMN_NAME = 'bogo_offer'
   `);
   if (!bogoCol.length) {
-    await query(`ALTER TABLE item_overrides ADD COLUMN bogo_offer VARCHAR(255) NULL`);
+    try {
+      await query(`ALTER TABLE item_overrides ADD COLUMN bogo_offer VARCHAR(255) NULL`);
+    } catch (error) {
+      // Some environments can return stale/mismatched information_schema reads; make this migration idempotent.
+      if (error?.code !== 'ER_DUP_FIELDNAME') {
+        throw error;
+      }
+    }
   }
 
   const storeIdOverrideCol = await query(`

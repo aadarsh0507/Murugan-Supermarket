@@ -9,6 +9,7 @@
     "dev": "nodemon server.js",
     "create-admin": "node scripts/createAdmin.js",
     "ensure-po-tables": "node scripts/ensurePurchaseOrdersTables.js",
+    "ensure-user-stores": "node scripts/ensureUserStoresTable.js",
     "migrate-schema": "node scripts/migrateSchema.js",
     "fix-supplier-code": "node scripts/fixSupplierCodeColumn.js",
     "add-store-id-categories": "node scripts/addStoreIdToCategories.js",

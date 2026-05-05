@@ -41,6 +41,126 @@ if (sslParam && !['0', 'false', 'no'].includes(sslParam.toLowerCase())) {
   baseConnectionConfig.ssl = { rejectUnauthorized: false };
 }
 
+const ensureSubcategoryTableExists = async () => {
+  if (!databaseName) {
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      ...baseConnectionConfig,
+      database: databaseName
+    });
+
+    const [tableRows] = await connection.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Subcategory' LIMIT 1`,
+      [databaseName]
+    );
+
+    if (tableRows.length > 0) {
+      return;
+    }
+
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS \`Subcategory\` (
+        \`SubCategoryCode\` int NOT NULL,
+        \`Description\` text,
+        \`ParentId\` int DEFAULT NULL,
+        \`CreationDate\` text,
+        \`CreatedbyUser\` text,
+        \`ModifiedbyUser\` text,
+        \`ModifiedDate\` text,
+        \`IsActive\` int DEFAULT NULL,
+        \`store_id\` int unsigned DEFAULT NULL,
+        \`IsImported\` int DEFAULT NULL,
+        \`FileName\` text,
+        \`ImportedDate\` text,
+        \`OldCode\` text,
+        \`MasterId\` int DEFAULT NULL,
+        \`SyncId\` text,
+        PRIMARY KEY (\`SubCategoryCode\`),
+        KEY \`idx_store_id\` (\`store_id\`)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;`
+    );
+    console.info('✅ Created missing table Subcategory');
+  } catch (error) {
+    console.error('Failed to ensure Subcategory table:', error.message);
+    throw error;
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+};
+
+const ensureTaxTableExists = async () => {
+  if (!databaseName) {
+    return;
+  }
+
+  let connection;
+  try {
+    connection = await mysql.createConnection({
+      ...baseConnectionConfig,
+      database: databaseName
+    });
+
+    const [tableRows] = await connection.query(
+      `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = ? AND TABLE_NAME = 'Tax' LIMIT 1`,
+      [databaseName]
+    );
+
+    if (tableRows.length > 0) {
+      return;
+    }
+
+    await connection.query(
+      `CREATE TABLE IF NOT EXISTS \`Tax\` (
+        \`Taxcode\` int NOT NULL AUTO_INCREMENT,
+        \`Description\` text,
+        \`Centralsalestax\` int DEFAULT NULL,
+        \`Localsalestax\` int DEFAULT NULL,
+        \`Surcharge\` int DEFAULT NULL,
+        \`Taxonmrp\` int DEFAULT NULL,
+        \`InActive\` int DEFAULT NULL,
+        \`store_id\` int DEFAULT NULL,
+        \`Mrpinclusive\` int DEFAULT NULL,
+        \`CreationDate\` text,
+        \`ModifiedDate\` text,
+        \`CreatedbyUser\` text,
+        \`ModifiedbyUser\` text,
+        \`Taxmode\` int DEFAULT NULL,
+        \`OldCode\` text,
+        \`TaxApplicable\` int DEFAULT NULL,
+        \`CommodityCode\` text,
+        \`CESS\` int DEFAULT NULL,
+        \`FAValueAt\` int DEFAULT NULL,
+        \`SurchargeOnTCS\` text,
+        \`ServiceTax\` text,
+        \`EffectiveTaxPercentage\` text,
+        \`CessBasedOn\` text,
+        \`STAddlTaxBasedOn\` text,
+        \`TaxComputationBasedOn\` text,
+        \`STCess\` text,
+        \`STEducess\` text,
+        \`IsGST\` int DEFAULT NULL,
+        \`GSTCESSBasedOn\` text,
+        \`B2CTaxCode\` text,
+        PRIMARY KEY (\`Taxcode\`)
+      ) ENGINE=InnoDB AUTO_INCREMENT=24 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;`
+    );
+    console.info('✅ Created missing table Tax');
+  } catch (error) {
+    console.error('Failed to ensure Tax table:', error.message);
+    throw error;
+  } finally {
+    if (connection) {
+      await connection.end();
+    }
+  }
+};
+
 const ensureDatabaseExists = async () => {
   if (!databaseName) {
     return;
@@ -231,6 +351,8 @@ const ensureBrandSubcategoryColumn = async () => {
 try {
   await ensureDatabaseExists();
   await ensureUsersTableSchema();
+  await ensureSubcategoryTableExists();
+  await ensureTaxTableExists();
   await ensureBrandSubcategoryColumn();
 } catch (error) {
   console.error('Failed to prepare database:', error.message);
