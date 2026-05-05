@@ -1,0 +1,60 @@
+# Environment Configuration
+NODE_ENV=development
+PORT=5000
+
+VITE_BACKEND_URL=http://localhost:5000/api
+
+# MongoDB Configuration
+# MONGODB_URI=mongodb+srv://infor0507:Darkbeard04@cluster0.uqan3nt.mongodb.net/Super_Market?retryWrites=true&w=majority&appName=Cluster0
+
+# Client MySQL (local/docker). Use same password in MYSQL_URL and MYSQL_ROOT_PASSWORD for docker-compose.
+MYSQL_URL=mysql://root:Pushdiggy%406864@localhost:3306/Super_Market
+
+MYSQL_GLOBAL_HOST=localhost
+MYSQL_GLOBAL_PORT=3307
+MYSQL_GLOBAL_USER=root
+MYSQL_GLOBAL_PASSWORD=Pushdiggy@6864
+MYSQL_GLOBAL_DATABASE=Super_Market
+
+# mysql://root:market_2025@localhost:3306/Super_Market
+# mysql://apiuser:market_2025@103.238.128.49:3306/Super_Market
+# mysql://root:market_2025@localhost:3306/Super_Market
+MY_SQL_URI_APP=mysql://root:Pushdiggy%406864@127.0.0.1:3306/Super_Mart_Mobile_app
+# mysql://apiuser:market_2025@103.238.128.49:3306/Super_Mart_Mobile_app
+MOBILE_APP_UPLOADS_BASE_URL=http://172.16.7.209:5002
+# Local dev with SSH tunnel: MYSQL_GLOBAL_HOST=127.0.0.1, MYSQL_GLOBAL_PORT=3307
+# Client in another city (direct): use server public IP and port 3306 (see comments below)
+# MYSQL_GLOBAL_HOST=localhost
+# MYSQL_GLOBAL_PORT=3306
+# MYSQL_GLOBAL_USER=root
+# MYSQL_GLOBAL_PASSWORD=Pushdiggy@6864
+# MYSQL_GLOBAL_DATABASE=Super_Market
+ENABLE_GLOBAL_DB=true
+   # Increase connection timeout (in milliseconds)
+   MYSQL_CONNECT_TIMEOUT=60000  # 60 seconds
+   MYSQL_ACQUIRE_TIMEOUT=120000 # 120 seconds
+# JWT Configuration
+JWT_SECRET=167ba18f6f39ae44a8140ed31e3290721b3bd811b693b35f4a634061a73a1a8fdffe8c12a058d27a494cc88735c8e2025231ed71abdc10130d158eb46938a67d
+JWT_EXPIRE=7d
+
+# Other configurations
+BCRYPT_ROUNDS=12
+
+
+# Email Configuration
+EMAIL_USER=pushdiggy@gmail.com
+EMAIL_PASS=fppk dxah kzxa jcms
+SYNC_INCREMENTAL=true
+FRONTEND_URL=http://localhost:5173
+
+# Daily backup at 1 PM – uses MYSQL_URL (client DB) only, never global DB.
+# BACKUP_TZ=Asia/Kolkata
+# Client MySQL container name (must match the container that MYSQL_URL points to)
+MYSQL_BACKUP_CONTAINER=mysql8
+
+RAZORPAY_KEY_ID=rzp_live_SSM7FiDWXFrV0Y
+RAZORPAY_KEY_SECRET=I04WPd0va3FJwoQge1x5e2s2
+# Public key for frontend (same as RAZORPAY_KEY_ID; only key_secret stays server-side)
+VITE_RAZORPAY_KEY_ID=rzp_live_SSM7FiDWXFrV0Y
+
+DEV_API_KEY=my_dev_key_12345
