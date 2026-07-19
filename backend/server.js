@@ -296,16 +296,16 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-  console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
-  console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📱 Frontend URL: ${process.env.FRONTEND_URL}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV}`);
 
-  // Daily backup at 1 PM – BACKUP_VOLUME_PATH = save in MySQL container volume; else BACKUP_DIR on host
-  const backupTarget = process.env.BACKUP_VOLUME_PATH
-    ? `Docker volume ${process.env.MYSQL_BACKUP_CONTAINER || 'mysql8'}:${process.env.BACKUP_VOLUME_PATH}`
-    : (process.env.BACKUP_DIR || 'backups (default)');
-  cron.schedule('0 13 * * *', () => runDailyBackup(), { timezone: process.env.BACKUP_TZ || 'Asia/Kolkata' });
-  console.log(`🕐 Daily backup at 1 PM (${process.env.BACKUP_TZ || 'Asia/Kolkata'}) → ${backupTarget}`);
+    // Daily backup at 1 PM – BACKUP_VOLUME_PATH = save in MySQL container volume; else BACKUP_DIR on host
+    const backupTarget = process.env.BACKUP_VOLUME_PATH
+      ? `Docker volume ${process.env.MYSQL_BACKUP_CONTAINER || 'mysql8'}:${process.env.BACKUP_VOLUME_PATH}`
+      : (process.env.BACKUP_DIR || 'backups (default)');
+    cron.schedule('0 13 * * *', () => runDailyBackup(), { timezone: process.env.BACKUP_TZ || 'Asia/Kolkata' });
+    console.log(`🕐 Daily backup at 1 PM (${process.env.BACKUP_TZ || 'Asia/Kolkata'}) → ${backupTarget}`);
 });
 
 export default app;

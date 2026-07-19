@@ -1,5 +1,8 @@
 import { validationResult } from 'express-validator';
 import pool, { query } from '../db/index.js';
+import fs from 'fs';
+import { createReadStream } from 'fs';
+import csvParser from 'csv-parser';
 import {
     listStores as listStoresRepository,
     createStore as createStoreRepository,
@@ -360,9 +363,9 @@ const buildPayload = (body, columnMap) => {
 
 export const listSuppliers = async (req, res) => {
     try {
-        const { search, limit = 100, storeId } = req.query;
+        const { search, limit, storeId } = req.query;
         const searchTerm = typeof search === 'string' ? search.trim() : undefined;
-        const limitValue = Math.min(Number.parseInt(limit, 10) || 100, 1000);
+        const limitValue = limit ? Math.min(Number.parseInt(limit, 10) || 10000, 10000) : 10000;
         const normalizedStoreId = Number(storeId);
         const hasStoreFilter = Number.isInteger(normalizedStoreId) && normalizedStoreId > 0;
 
@@ -1669,5 +1672,297 @@ export const removeStoreFromSupplier = async (req, res) => {
             status: 'error',
             message: 'Server error while removing store from supplier'
         });
+    }
+};
+
+// CSV column name → actual DB column name mapping for import
+// Keys are CSV header names lowercased; values are the exact DB column names
+const CSV_IMPORT_MAP = {
+    suppliercode: 'SUPPLIERCODE',
+    name: 'NAME',
+    suppliername: 'NAME',
+    abbreviation: 'Abbreviation',
+    creationdate: 'Creationdate',
+    address1: 'STREET',       // CSV Address1 → DB STREET
+    address2: 'ADDRESS1',     // CSV Address2 → DB ADDRESS1
+    address3: 'ADDRESS2',     // CSV Address3 → DB ADDRESS2
+    citycode: 'CITY',         // CSV Citycode → DB CITY
+    state: 'STATE',
+    pincode: 'PINCODE',
+    tngstnumber: 'TINNO',     // CSV Tngstnumber → DB TINNO
+    phone: 'PHONENO',         // CSV Phone → DB PHONENO
+    fax: 'Fax',
+    email: 'Email',
+    tradediscount: 'Tradediscount',
+    creditdays: 'Creditdays',
+    paymentofweek: 'Paymentofweek',
+    suppliertype: 'Suppliertype',
+    discountoption: 'Discountoption',
+    overalldiscountoption: 'OverallDiscountOption',
+    paymentmode: 'Paymentmode',
+    productdiscount: 'Productdiscount',
+    accounttype: 'Accounttype',
+    leadtime: 'Leadtime',
+    orderschedule: 'Orderschedule',
+    deliveryschedule: 'Deliveryschedule',
+    cstnumber: 'Cstnumber',
+    dlnumber: 'Dlnumber',
+    contactperson1: 'Contactperson1',
+    cp1address1: 'CP1Address1',
+    cp1address2: 'CP1Address2',
+    cp1address3: 'CP1Address3',
+    cp1citycode: 'CP1Citycode',
+    cp1state: 'CP1State',
+    cp1pincode: 'CP1Pincode',
+    cp1designation: 'CP1Designation',
+    cp1phone: 'CP1Phone',
+    cp1mobileno: 'CP1MobileNo',
+    cp1fax: 'CP1Fax',
+    cp1email: 'CP1Email',
+    contactperson2: 'Contactperson2',
+    cp2address1: 'CP2Address1',
+    cp2address2: 'CP2Address2',
+    cp2address3: 'CP2Address3',
+    cp2citycode: 'CP2Citycode',
+    cp2state: 'CP2State',
+    cp2pincode: 'CP2Pincode',
+    cp2designation: 'CP2Designation',
+    cp2phone: 'CP2Phone',
+    cp2mobileno: 'CP2MobileNo',
+    cp2fax: 'CP2Fax',
+    cp2email: 'CP2Email',
+    placeorder: 'Placeorder',
+    producttype: 'Producttype',
+    type: 'Type',
+    creditterms: 'Creditterms',
+    remarks: 'Remarks',
+    tinnumber: 'Tinnumber',
+    vatdealertype: 'Vatdealertype',
+    universalsuppliercode: 'Universalsuppliercode',
+    reworkpurchaseprice: 'Reworkpurchaseprice',
+    purchasereturnmode: 'Purchase Orderreturnmode',
+    purchasereturnpercentage: 'Purchase Orderreturnpercentage',
+    calculatetaxforfree: 'Calculatetaxforfree',
+    suppliertoleranceinpercentage: 'Suppliertoleranceinpercentage',
+    ordcitycode: 'OrdCitycode',
+    inceptiondate: 'Inceptiondate',
+    transportationmode: 'Transportationmode',
+    suppliercategorycode: 'Suppliercategorycode',
+    mobilenumber: 'Mobilenumber',
+    stocktosaleratio: 'StockToSaleRatio',
+    expordsettlement: 'ExpOrDamageSettlement',
+    expordamagesettlement: 'ExpOrDamageSettlement',
+    modifieddate: 'ModifiedDate',
+    createdbyuser: 'CreatedbyUser',
+    modifiedbyuser: 'ModifiedbyUser',
+    importeddate: 'Importeddate',
+    isimported: 'IsImported',
+    filename: 'FileName',
+    grnheaderinfo: 'GrnHeaderInfo',
+    grnheadercolwidth: 'GrnHeaderColWidth',
+    grnheaderlockedcol: 'GrnHeaderLockedCol',
+    isactive: 'isActive',
+    returnadjustmentmode: 'ReturnAdjustmentMode',
+    proddiscaffectscost: 'ProdDiscAffectsCost',
+    overalldiscaffectscost: 'OverallDiscAffectsCost',
+    marginbasedon: 'MarginBasedOn',
+    freeaffectcost: 'FreeAffectCost',
+    expirydamageratemode: 'ExpiryDamageRateMode',
+    expirydamagelesspercent: 'ExpiryDamageLessPercentage',
+    expirydamagelespercentage: 'ExpiryDamageLessPercentage',
+    oldcode: 'OldCode',
+    purchaselocation: 'Purchase OrderLocation',
+    printformat: 'PrintFormat',
+    supplierorderlevel: 'SupplierOrderLevel',
+    supplierorderratio: 'SupplierOrderRatio',
+    freeaffectmargin: 'FreeAffectMargin',
+    dlnumber1: 'DlNumber1',
+    issueseriesname: 'IssueSeriesName',
+    lastissueno: 'LastIssueNo',
+    mrptoleranceamt: 'MrpToleranceAmt',
+    mrpnegativetoleranceamt: 'MrpNegativeToleranceAmt',
+    masterid: 'MasterId',
+    purchasepriceinclexiseduty: 'Purchase OrderPriceInclExiseDuty',
+    purchasepriceinclexisduty: 'Purchase OrderPriceInclExiseDuty',
+    overalldiscountaffectsmargin: 'OverallDiscountAffectsMargin',
+    cstaffectcost: 'CSTAffectCost',
+    cstaffectmargin: 'CSTAffectMargin',
+    cstcomputation: 'CSTComputation',
+    productdiscountaffectsmargin: 'ProductDiscountAffectsMargin',
+    contactperson1phoneno: 'ContactPerson1PhoneNo',
+    contactperson2phoneno: 'ContactPerson2PhoneNo',
+    supplierreturnreminderfromdate: 'SupplierReturnRemainderFromDate',
+    supplierreturnremindertodate: 'SupplierReturnRemainderToDate',
+    accountspaymentmode: 'AccountsPaymentMode',
+    poloadingorder: 'POLoadingOrder',
+    areacode: 'Areacode',
+    automatch: 'AutoMatch',
+    markup: 'MarkUp',
+    markdown: 'MarkDown',
+    markuprate1: 'MarkUpRate1',
+    markdownrate1: 'MarkDownRate1',
+    markuprate2: 'MarkUpRate2',
+    markdownrate2: 'MarkDownRate2',
+    additionalcostaffectitemcost: 'AdditionalCostAffectItemCost',
+    printdo: 'printDo',
+    ccmailid: 'CCMailId',
+    allowsms: 'AllowSMS',
+    lbtapplicable: 'LBTApplicable',
+    excisedutycode: 'ExciseDutyCode',
+    aiocdssuppliercode: 'AIOCDSupplierCode',
+    buyerid: 'BuyerID',
+    paymentat: 'PaymentAt',
+    allowedmailtrans: 'AllowedMailTrans',
+    currencycode: 'CurrencyCode',
+    poapprovalrequired: 'POApprovalRequired',
+    pannumber: 'PANNumber',
+    salesrepmobileno: 'SalesRepMobileNo',
+    dealertype: 'DealerType',
+    gstnumber: 'GSTNumber',
+    tannumber: 'TANNumber',
+    uniqueidentificationnumber: 'UniqueIdentificationNumber',
+    weborderenabled: 'WebOrderEnabled',
+    supplieruidnumber: 'SupplierUIDNumber',
+    validseries: 'ValidSeries',
+    transportcode: 'TransportCode',
+    distance: 'Distance',
+    syncid: 'SyncId',
+    opbalentrydate: 'OpBalEntryDate',
+    duedateaschequedate: 'DueDateasChequeDate',
+    createdatstorecode: 'CreatedAtStoreCode',
+    duedatecalculation: 'DueDateCalculation',
+    autopomail: 'AutoPOMail',
+    poterms: 'POTerms',
+    enablefortcs: 'EnableforTCS',
+    loadbottleitem: 'LoadBottleItem',
+    considerfreefoeexpiry: 'ConsiderFreeForExpiry',
+    considerfreeforexpiry: 'ConsiderFreeForExpiry',
+    isgstinverified: 'IsGSTINVerified',
+    gstinverifiedon: 'GSTINVerifiedOn',
+    gstinstatus: 'GSTINStatus',
+    enablefortds: 'EnableforTDS',
+};
+
+const NULL_VALUES = new Set(['null', 'NULL', '', 'undefined']);
+
+function parseCsvValue(val) {
+    if (val === undefined || NULL_VALUES.has(String(val).trim())) return null;
+    const s = String(val).trim();
+    return s === '' ? null : s;
+}
+
+export const importSuppliers = async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ status: 'error', message: 'No CSV file uploaded' });
+    }
+
+    const filePath = req.file.path;
+
+    try {
+        await ensureStoreIdColumn();
+        await ensureSupplierIsActiveColumn();
+        const columnMap = await getSupplierColumnMap();
+
+        const rows = await new Promise((resolve, reject) => {
+            const results = [];
+            createReadStream(filePath)
+                .pipe(csvParser())
+                .on('data', (row) => results.push(row))
+                .on('end', () => resolve(results))
+                .on('error', reject);
+        });
+
+        if (rows.length === 0) {
+            fs.unlink(filePath, () => {});
+            return res.status(400).json({ status: 'error', message: 'CSV file is empty' });
+        }
+
+        let inserted = 0;
+        let skipped = 0;
+        const errors = [];
+
+        for (const row of rows) {
+            try {
+                const dbRow = {};
+
+                for (const [csvCol, rawVal] of Object.entries(row)) {
+                    const key = csvCol.trim().toLowerCase();
+                    const dbField = CSV_IMPORT_MAP[key];
+                    if (!dbField) continue;
+
+                    // Check if this column exists in actual DB table
+                    const normalizedField = dbField.toUpperCase();
+                    const actualDbCol = columnMap?.[normalizedField];
+                    if (!actualDbCol) continue;
+
+                    const val = parseCsvValue(rawVal);
+                    dbRow[actualDbCol] = val;
+                }
+
+                // Must have a name
+                if (!dbRow['NAME'] && !dbRow['Suppliername']) {
+                    skipped++;
+                    continue;
+                }
+
+                // If Suppliername column exists in DB, mirror NAME → Suppliername
+                if (dbRow['NAME'] && columnMap?.['SUPPLIERNAME'] && !dbRow['Suppliername']) {
+                    dbRow['Suppliername'] = dbRow['NAME'];
+                }
+
+                // Handle store_id separately
+                const csvStoreId = parseCsvValue(row['store_id']);
+                if (csvStoreId !== null) {
+                    const n = Number(csvStoreId);
+                    if (Number.isInteger(n) && n > 0 && columnMap?.['STORE_ID']) {
+                        dbRow['store_id'] = n;
+                    }
+                }
+
+                // Handle SUPPLIERCODE — use CSV value if provided, let DB auto-increment otherwise
+                const csvCode = parseCsvValue(row['Suppliercode'] ?? row['suppliercode'] ?? row['SUPPLIERCODE']);
+                if (csvCode !== null) {
+                    const n = Number(csvCode);
+                    if (Number.isInteger(n) && n > 0) {
+                        dbRow['SUPPLIERCODE'] = n;
+                    }
+                }
+
+                if (Object.keys(dbRow).length === 0) {
+                    skipped++;
+                    continue;
+                }
+
+                const fields = Object.keys(dbRow);
+                const placeholders = fields.map(() => '?').join(', ');
+                const values = fields.map(f => dbRow[f]);
+
+                await query(
+                    `INSERT INTO Suppliers (${fields.map(f => `\`${f}\``).join(', ')}) VALUES (${placeholders})
+                     ON DUPLICATE KEY UPDATE NAME = VALUES(NAME)`,
+                    values
+                );
+                inserted++;
+            } catch (rowErr) {
+                errors.push({ row: row['Suppliercode'] ?? row['name'] ?? '?', error: rowErr.message });
+                skipped++;
+            }
+        }
+
+        fs.unlink(filePath, () => {});
+        // Clear column cache so next request re-reads the table
+        supplierColumnMapCache = null;
+
+        return res.status(200).json({
+            status: 'success',
+            message: `Import complete: ${inserted} inserted/updated, ${skipped} skipped`,
+            inserted,
+            skipped,
+            errors: errors.slice(0, 20),
+        });
+    } catch (err) {
+        fs.unlink(filePath, () => {});
+        console.error('Error importing suppliers CSV:', err);
+        return res.status(500).json({ status: 'error', message: 'Server error during import' });
     }
 };

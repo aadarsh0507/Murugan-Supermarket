@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { queryMobileApp, isMobileAppDbConfigured } from '../db/mobileAppDb.js';
+import { query as queryMainDb } from '../db/index.js';
 import { uploadsRootDir } from '../utils/uploads.js';
 
 const trimTrailingSlash = (value = '') => String(value).replace(/\/+$/, '');
@@ -40,6 +41,64 @@ const inferMobileAppBaseUrl = () => {
   } catch {
     return '';
   }
+};
+
+const buildItemImageUrl = (req, imageUrl) => {
+  if (!imageUrl || typeof imageUrl !== 'string') return null;
+  const cleaned = imageUrl.trim().replace(/\\/g, '/');
+  if (!cleaned) return null;
+  if (isHttpUrl(cleaned)) return cleaned;
+
+  const configuredBase =
+    process.env.ITEM_IMAGE_BASE_URL ||
+    process.env.UPLOADS_BASE_URL ||
+    process.env.BACKEND_PUBLIC_URL ||
+    process.env.API_PUBLIC_URL ||
+    '';
+
+  const forwardedProto = req?.get?.('x-forwarded-proto')?.split(',')[0]?.trim();
+  const forwardedHost = req?.get?.('x-forwarded-host')?.split(',')[0]?.trim();
+  const protocol = forwardedProto || req?.protocol || 'http';
+  const host = forwardedHost || req?.get?.('host') || '';
+  const requestBase = host ? `${protocol}://${host}` : '';
+
+  const base = trimTrailingSlash(configuredBase || requestBase);
+  if (!base) return cleaned;
+  return `${base}/api/items/image?src=${encodeURIComponent(cleaned)}`;
+};
+
+const enrichItemsWithImages = async (items, req) => {
+  if (!Array.isArray(items) || items.length === 0) return items;
+
+  const productIds = items.map((i) => i.productId).filter(Boolean);
+  if (productIds.length === 0) return items;
+
+  let overrides = [];
+  try {
+    const placeholders = productIds.map(() => '?').join(', ');
+    overrides = await queryMainDb(
+      `SELECT product_code, image_url FROM item_overrides WHERE product_code IN (${placeholders}) AND image_url IS NOT NULL AND image_url != ''`,
+      productIds.map(String)
+    );
+  } catch (err) {
+    console.error('Failed to fetch item images from item_overrides:', err.message);
+    return items;
+  }
+
+  const imageMap = {};
+  for (const row of overrides) {
+    imageMap[String(row.product_code)] = row.image_url;
+  }
+
+  return items.map((item) => {
+    const rawImage = imageMap[String(item.productId)];
+    if (!rawImage) return item;
+    return {
+      ...item,
+      productImage: buildItemImageUrl(req, rawImage),
+      imagePath: rawImage,
+    };
+  });
 };
 
 const sanitizeReturnImageSource = (value) => {
@@ -428,10 +487,10 @@ export const getMobileOrderById = async (req, res) => {
 
     let items = [];
     try {
-      // Best-effort fetch of order items; log and continue on failure
       items = await queryMobileApp('SELECT * FROM order_items WHERE orderId = ?', [
         orderId,
       ]);
+      items = await enrichItemsWithImages(items, req);
     } catch (itemsError) {
       console.error('Failed to load mobile order items:', itemsError.message);
       items = [];
@@ -684,23 +743,10 @@ export const serveOrderReturnImage = async (req, res) => {
     }
 
     const remoteCandidates = buildRemoteReturnImageCandidates(imageSource);
-    for (const candidateUrl of remoteCandidates) {
-      try {
-        const upstreamResponse = await fetch(candidateUrl);
-        if (!upstreamResponse.ok) {
-          continue;
-        }
 
-        const contentType = upstreamResponse.headers.get('content-type');
-        if (contentType) {
-          res.setHeader('Content-Type', contentType);
-        }
-
-        const arrayBuffer = await upstreamResponse.arrayBuffer();
-        return res.send(Buffer.from(arrayBuffer));
-      } catch (_error) {
-        // Try the next candidate URL.
-      }
+    // Try redirect first — lets the browser load directly from the source server
+    if (remoteCandidates.length > 0) {
+      return res.redirect(302, remoteCandidates[0]);
     }
 
     return res.status(404).json({
