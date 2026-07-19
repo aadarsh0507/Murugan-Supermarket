@@ -55,13 +55,24 @@ const MOBILE_APP_BASE_URL = (
 
 const getReturnImageSrc = (imageUrl) => {
   if (!imageUrl || typeof imageUrl !== "string") return null;
-  // If it's a relative upload path and we have the mobile app base URL, serve directly
-  if (MOBILE_APP_BASE_URL && !imageUrl.startsWith("http")) {
-    const cleanPath = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
-    return `${MOBILE_APP_BASE_URL}${cleanPath}`;
+  const trimmed = imageUrl.trim();
+  if (!trimmed) return null;
+
+  // Already a full URL — use as-is
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
   }
-  // Fallback: proxy through backend
-  return `${API_BASE_URL}/mobile-orders/return-image?src=${encodeURIComponent(imageUrl)}`;
+
+  // Normalize to a bare filename (strip leading slashes and "uploads/" prefix)
+  const bare = trimmed.replace(/^\/+/, "").replace(/^uploads\//, "");
+
+  // If a mobile app base URL is explicitly configured, prefix with it + /uploads/
+  if (MOBILE_APP_BASE_URL) {
+    return `${MOBILE_APP_BASE_URL}/uploads/${bare}`;
+  }
+
+  // Fallback: root-relative /uploads/ path (works via nginx on production)
+  return `/uploads/${bare}`;
 };
 
 const Orders = () => {
@@ -868,13 +879,9 @@ const Orders = () => {
                               </span>
                               <div className="rounded-md border bg-muted/30 overflow-hidden inline-block max-w-full">
                                 <img
-                                  src={
-                                    getReturnImageSrc(
-                                      selectedOrder.returnImageUrl || selectedOrder.return_image_url
-                                    ) ||
-                                    selectedOrder.returnImageUrl ||
-                                    selectedOrder.return_image_url
-                                  }
+                                  src={getReturnImageSrc(
+                                    selectedOrder.returnImageUrl || selectedOrder.return_image_url
+                                  )}
                                   alt="Return attachment"
                                   className="max-h-64 w-auto object-contain"
                                 />
@@ -1044,7 +1051,7 @@ const Orders = () => {
                           {req.imageUrl ? (
                             <div className="rounded border overflow-hidden w-12 h-12 flex-shrink-0">
                               <img
-                                src={getReturnImageSrc(req.imageUrl) || req.imageUrl}
+                                src={getReturnImageSrc(req.imageUrl)}
                                 alt=""
                                 className="w-full h-full object-cover"
                                 onError={(e) => { e.target.style.display = "none"; }}
