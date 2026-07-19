@@ -139,6 +139,8 @@ const Suppliers = () => {
   const [stores, setStores] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 20;
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [togglingSupplierId, setTogglingSupplierId] = useState(null);
@@ -209,8 +211,7 @@ const Suppliers = () => {
     try {
       const [suppliersRes, storesRes] = await Promise.all([
         suppliersAPI.getSuppliers({
-          limit: 100,
-          ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
+                    ...(selectedStoreId ? { storeId: selectedStoreId } : {}),
         }),
         suppliersAPI.getStores({ isActive: true })
       ]);
@@ -300,6 +301,16 @@ const Suppliers = () => {
     
     return matchesSearch && matchesStatus;
   });
+
+  const totalPages = Math.max(1, Math.ceil(filteredSuppliers.length / PAGE_SIZE));
+  const paginatedSuppliers = filteredSuppliers.slice(
+    (currentPage - 1) * PAGE_SIZE,
+    currentPage * PAGE_SIZE
+  );
+
+  // Reset to page 1 when filters change
+  const handleSearchChange = (val) => { setSearchTerm(val); setCurrentPage(1); };
+  const handleFilterChange = (val) => { setFilterStatus(val); setCurrentPage(1); };
 
   const handleAddNew = () => {
     setEditingSupplier(null);
@@ -1110,8 +1121,14 @@ const Suppliers = () => {
       {/* Filters */}
       <Card>
         <CardContent className="pt-6">
-          <div className="flex gap-4">
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
+          <div className="flex gap-4 flex-wrap items-center">
+            <Input
+              placeholder="Search suppliers..."
+              value={searchTerm}
+              onChange={(e) => handleSearchChange(e.target.value)}
+              className="w-64"
+            />
+            <Select value={filterStatus} onValueChange={handleFilterChange}>
               <SelectTrigger className="w-[180px]">
                 <SelectValue placeholder="Filter by status" />
               </SelectTrigger>
@@ -1121,6 +1138,9 @@ const Suppliers = () => {
                 <SelectItem value="inactive">Inactive Only</SelectItem>
               </SelectContent>
             </Select>
+            <span className="text-sm text-muted-foreground ml-auto">
+              {filteredSuppliers.length} supplier{filteredSuppliers.length !== 1 ? "s" : ""}
+            </span>
           </div>
         </CardContent>
       </Card>
@@ -1149,9 +1169,9 @@ const Suppliers = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                filteredSuppliers.map((supplier, index) => (
+                paginatedSuppliers.map((supplier, index) => (
                   <TableRow key={supplier._id}>
-                    <TableCell className="text-muted-foreground">{index + 1}</TableCell>
+                    <TableCell className="text-muted-foreground">{(currentPage - 1) * PAGE_SIZE + index + 1}</TableCell>
                     <TableCell className="font-medium">{supplier.companyName}</TableCell>
                     <TableCell>
                       {supplier.contactPerson?.firstName} {supplier.contactPerson?.lastName}
@@ -1275,6 +1295,71 @@ const Suppliers = () => {
               )}
             </TableBody>
           </Table>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between pt-4 border-t mt-4">
+              <p className="text-sm text-muted-foreground">
+                Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredSuppliers.length)} of {filteredSuppliers.length}
+              </p>
+              <div className="flex items-center gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1}
+                >
+                  «
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  ‹
+                </Button>
+                {Array.from({ length: totalPages }, (_, i) => i + 1)
+                  .filter(p => p === 1 || p === totalPages || Math.abs(p - currentPage) <= 2)
+                  .reduce((acc, p, idx, arr) => {
+                    if (idx > 0 && p - arr[idx - 1] > 1) acc.push('...');
+                    acc.push(p);
+                    return acc;
+                  }, [])
+                  .map((item, idx) =>
+                    item === '...' ? (
+                      <span key={`ellipsis-${idx}`} className="px-2 text-muted-foreground">…</span>
+                    ) : (
+                      <Button
+                        key={item}
+                        variant={currentPage === item ? "default" : "outline"}
+                        size="sm"
+                        onClick={() => setCurrentPage(item)}
+                        className="w-8"
+                      >
+                        {item}
+                      </Button>
+                    )
+                  )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  ›
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages}
+                >
+                  »
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

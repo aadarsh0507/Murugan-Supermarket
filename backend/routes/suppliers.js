@@ -12,9 +12,11 @@ import {
   updateStore as updateSupplierStore,
   deleteStore as deleteSupplierStore,
   addStoreToSupplier,
-  removeStoreFromSupplier
+  removeStoreFromSupplier,
+  importSuppliers
 } from '../controllers/supplierController.js';
 import { protect, requireScreen, requireAnyScreen } from '../middleware/auth.js';
+import { uploadCSV } from '../middleware/upload.js';
 
 const router = express.Router();
 router.use(protect);
@@ -80,6 +82,12 @@ router.patch(
   '/:supplierCode/toggle-status',
   supplierCodeParam,
   toggleSupplierStatus
+);
+
+router.post(
+  '/import',
+  uploadCSV.single('file'),
+  importSuppliers
 );
 
 router.post(

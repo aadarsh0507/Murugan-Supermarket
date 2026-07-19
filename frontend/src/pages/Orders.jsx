@@ -49,8 +49,18 @@ const hasReturn = (order) => {
   return Boolean(status && String(status).trim());
 };
 
+const MOBILE_APP_BASE_URL = (
+  import.meta.env.VITE_MOBILE_APP_UPLOADS_BASE_URL || ""
+).replace(/\/+$/, "");
+
 const getReturnImageSrc = (imageUrl) => {
   if (!imageUrl || typeof imageUrl !== "string") return null;
+  // If it's a relative upload path and we have the mobile app base URL, serve directly
+  if (MOBILE_APP_BASE_URL && !imageUrl.startsWith("http")) {
+    const cleanPath = imageUrl.startsWith("/") ? imageUrl : `/${imageUrl}`;
+    return `${MOBILE_APP_BASE_URL}${cleanPath}`;
+  }
+  // Fallback: proxy through backend
   return `${API_BASE_URL}/mobile-orders/return-image?src=${encodeURIComponent(imageUrl)}`;
 };
 
@@ -827,6 +837,7 @@ const Orders = () => {
                                     src={getReturnImageSrc(req.imageUrl) || req.imageUrl}
                                     alt="Return"
                                     className="max-h-48 w-auto object-contain"
+                                    onError={(e) => { e.target.style.display = "none"; }}
                                   />
                                 </div>
                               </div>
@@ -1036,6 +1047,7 @@ const Orders = () => {
                                 src={getReturnImageSrc(req.imageUrl) || req.imageUrl}
                                 alt=""
                                 className="w-full h-full object-cover"
+                                onError={(e) => { e.target.style.display = "none"; }}
                               />
                             </div>
                           ) : (

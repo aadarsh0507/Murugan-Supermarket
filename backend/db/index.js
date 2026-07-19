@@ -3,6 +3,8 @@ import { Sequelize } from 'sequelize';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
+import net from 'net';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,6 +17,51 @@ const envPaths = [
 for (const p of envPaths) {
   const r = dotenv.config({ path: p });
   if (r.parsed && process.env.MYSQL_URL) break;
+}
+
+// Start SSH tunnel before any DB connection if USE_SSH_TUNNEL=true
+if (process.env.USE_SSH_TUNNEL === 'true') {
+  const tunnelPort = 3306;
+  const alreadyOpen = await new Promise((resolve) => {
+    const sock = new net.Socket();
+    sock.setTimeout(300);
+    sock.on('connect', () => { sock.destroy(); resolve(true); });
+    sock.on('error', () => { sock.destroy(); resolve(false); });
+    sock.on('timeout', () => { sock.destroy(); resolve(false); });
+    sock.connect(tunnelPort, '127.0.0.1');
+  });
+
+  if (!alreadyOpen) {
+    const args = [
+      '-p', '2222', '-N',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ExitOnForwardFailure=yes',
+      '-o', 'ConnectTimeout=10',
+      '-L', `${tunnelPort}:${process.env.SSH_TUNNEL_REMOTE_HOST || '172.16.7.209'}:3306`,
+      `${process.env.SSH_USER || 'ggh'}@${process.env.SSH_HOST || '103.156.208.117'}`,
+    ];
+
+    console.log('🔐 Starting SSH tunnel...');
+    const tunnel = spawn('ssh', args, { stdio: 'ignore' });
+    tunnel.on('error', (err) => console.warn('SSH tunnel error:', err.message));
+    tunnel.on('exit', (code) => { if (code) console.warn(`SSH tunnel exited: ${code}`); });
+
+    // Wait until port is open (up to 15s)
+    await new Promise((resolve) => {
+      const start = Date.now();
+      const check = () => {
+        const sock = new net.Socket();
+        sock.setTimeout(500);
+        sock.on('connect', () => { sock.destroy(); console.log('✅ SSH tunnel ready'); resolve(); });
+        sock.on('error', () => { sock.destroy(); Date.now() - start < 15000 ? setTimeout(check, 300) : resolve(); });
+        sock.on('timeout', () => { sock.destroy(); Date.now() - start < 15000 ? setTimeout(check, 300) : resolve(); });
+        sock.connect(tunnelPort, '127.0.0.1');
+      };
+      check();
+    });
+  }
 }
 
 const mysqlUrl = process.env.MYSQL_URL;
